@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b1013">
+  <title>LOWER BASE — Tactical Command</title>
+  <link rel="icon" href="data:,">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand" aria-label="Lower Base"><span class="brand-mark">✦</span></div>
+      <div class="top-center"><span id="clock">00:00</span></div>
+      <div class="top-right"><span class="credits-icon">◆</span><strong id="credits" aria-label="Credits">0</strong></div>
+    </header>
+
+    <main class="layout">
+      <aside class="panel left-panel">
+        <div class="mode-switch" role="group" aria-label="Deployment mode">
+          <button id="gather" class="mode active" type="button" title="New units gather at your base"><span class="mode-icon">▥</span><span><strong>GATHER</strong></span><span class="mode-key">1</span></button>
+          <button id="attack" class="mode" type="button" title="Send all gathered units and new units north; attacks cannot be recalled"><span class="mode-icon">➤</span><span><strong>ATTACK</strong></span><span class="mode-key">2</span></button>
+        </div>
+        <div id="production" class="production"></div>
+        <div class="selection-box"><div class="selection-top"><span>SELECTED</span><strong id="selected-count">00</strong></div><button id="send-selected" class="send-button" type="button" title="Send selected units north; attacks cannot be recalled" disabled><span>↗</span> SEND <span>↗</span></button></div>
+      </aside>
+
+      <section class="battlefield" aria-label="3D battlefield">
+        <div id="scene" title="Select gathered units"></div>
+        <div class="scene-vignette"></div>
+        <div class="view-switch" role="group" aria-label="Battlefield view"><button id="map-view" type="button" class="active" aria-pressed="true">MAP</button><button id="base-view" type="button" aria-pressed="false">BASE</button></div>
+        <div id="loading" class="overlay"><div class="overlay-card"><div class="loader"></div><h2>LOADING</h2></div></div>
+        <div id="game-over" class="overlay hidden"><div class="overlay-card"><h2 id="result-title">VICTORY</h2><button id="restart" type="button">PLAY AGAIN</button></div></div>
+      </section>
+
+      <aside class="panel right-panel">
+        <div class="force"><div class="force-heading"><span><i class="key-friendly"></i> ALLIED</span></div><div class="force-stats"><div><strong id="friendly-units">0</strong><small>UNITS</small></div><div><strong id="friendly-buildings">0</strong><small>STRUCTURES</small></div></div><div class="force-bar"><span id="friendly-bar"></span></div></div>
+        <div class="force hostile"><div class="force-heading"><span><i class="key-enemy"></i> HOSTILE</span></div><div class="force-stats"><div><strong id="enemy-units">0</strong><small>UNITS</small></div><div><strong id="enemy-buildings">0</strong><small>STRUCTURES</small></div></div><div class="force-bar"><span id="enemy-bar"></span></div></div>
+      </aside>
+    </main>
+  </div>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
