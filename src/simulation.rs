@@ -1,5 +1,8 @@
 use serde::Serialize;
 
+#[path = "navigation.rs"]
+mod navigation;
+
 const FIELD_EDGE: f32 = 17.0;
 const QUEUE_LIMIT: usize = 8;
 const COLLECTOR_CAPACITY: f32 = 100.0;
@@ -61,6 +64,13 @@ impl UnitKind {
             Self::Rocket => 6.6,
             Self::Tank => 5.6,
             Self::Collector => 6.0,
+        }
+    }
+    fn radius(self) -> f32 {
+        match self {
+            Self::Soldier | Self::Rocket => 0.7,
+            Self::Tank => 1.45,
+            Self::Collector => 1.65,
         }
     }
     fn range(self) -> f32 {
@@ -140,6 +150,8 @@ pub struct Unit {
     pub returning: bool,
     #[serde(skip)]
     cooldown: f32,
+    #[serde(skip)]
+    navigation: navigation::Navigation,
     #[serde(skip)]
     rally_x: f32,
     #[serde(skip)]
@@ -331,6 +343,7 @@ impl Game {
             cargo: 0.0,
             returning: false,
             cooldown: 0.2,
+            navigation: navigation::Navigation::default(),
             rally_x: x,
             rally_z: direction * (27.0 + row * 2.2),
         });
@@ -451,6 +464,7 @@ impl Game {
             }
         }
         self.combat_and_move(dt);
+        self.resolve_collisions();
         self.units.retain(|u| u.hp > 0.0);
         self.buildings.retain(|b| b.hp > 0.0);
         if !self.alive_building(Team::Player, BuildingKind::Barracks) {
@@ -612,6 +626,7 @@ impl Game {
         }
     }
     fn harvest_and_unload(&mut self, dt: f32) {
+        let snapshot = self.units.clone();
         for unit in &mut self.units {
             if unit.kind != UnitKind::Collector || unit.hp <= 0.0 {
                 continue;
@@ -640,17 +655,22 @@ impl Game {
             unit.returning |=
                 unit.cargo >= COLLECTOR_CAPACITY || (deposit.is_none() && unit.cargo > 0.0);
             let (x, z, stopping_distance) = if unit.returning {
-                (refinery.x, refinery.z - refinery.z.signum() * 3.5, 0.5)
+                (refinery.x, refinery.z, 5.4)
             } else if let Some(i) = deposit {
-                (self.ore[i].x, self.ore[i].z, 1.5)
+                (self.ore[i].x, self.ore[i].z, 3.0)
             } else {
                 continue;
             };
             let distance = distance_sq(unit.x, unit.z, x, z).sqrt();
             if distance > stopping_distance + 0.01 {
-                let travel = (unit.kind.speed() * dt).min(distance - stopping_distance);
-                unit.x += (x - unit.x) / distance * travel;
-                unit.z += (z - unit.z) / distance * travel;
+                navigation::move_toward(
+                    unit,
+                    (x, z),
+                    stopping_distance,
+                    dt,
+                    &snapshot,
+                    &self.buildings,
+                );
             } else if unit.returning {
                 if unit.team == Team::Player {
                     self.credits = (self.credits + unit.cargo).min(2000.0);
@@ -671,13 +691,81 @@ impl Game {
             }
         }
     }
+    // Resolve all units together, including collectors and opposing teams. Small
+    // simulation steps prevent moving units from tunneling through one another.
+    fn resolve_collisions(&mut self) {
+        for _ in 0..48 {
+            let mut overlap_found = false;
+            for unit in &mut self.units {
+                if unit.hp <= 0.0 {
+                    continue;
+                }
+                let radius = unit.kind.radius();
+                for building in self.buildings.iter().filter(|b| b.hp > 0.0) {
+                    let (half_x, half_z) = building_half_size(building.kind);
+                    let dx = unit.x - building.x;
+                    let dz = unit.z - building.z;
+                    let closest_x = dx.clamp(-half_x, half_x);
+                    let closest_z = dz.clamp(-half_z, half_z);
+                    let (ox, oz) = (dx - closest_x, dz - closest_z);
+                    let distance = (ox * ox + oz * oz).sqrt();
+                    if distance > 0.0 && distance < radius {
+                        overlap_found = true;
+                        unit.x += ox / distance * (radius - distance);
+                        unit.z += oz / distance * (radius - distance);
+                    } else if distance == 0.0 {
+                        overlap_found = true;
+                        // A newly spawned or displaced unit inside the footprint
+                        // leaves through its nearest side.
+                        let x_gap = half_x - dx.abs();
+                        let z_gap = half_z - dz.abs();
+                        if x_gap < z_gap {
+                            unit.x =
+                                building.x + if dx < 0.0 { -1.0 } else { 1.0 } * (half_x + radius);
+                        } else {
+                            unit.z =
+                                building.z + if dz < 0.0 { -1.0 } else { 1.0 } * (half_z + radius);
+                        }
+                    }
+                }
+                unit.x = unit.x.clamp(-FIELD_EDGE, FIELD_EDGE);
+            }
+            for i in 0..self.units.len() {
+                let (left, right) = self.units.split_at_mut(i + 1);
+                let a = &mut left[i];
+                if a.hp <= 0.0 {
+                    continue;
+                }
+                for b in right.iter_mut().filter(|u| u.hp > 0.0) {
+                    let (dx, dz) = (b.x - a.x, b.z - a.z);
+                    let distance = (dx * dx + dz * dz).sqrt();
+                    let overlap = a.kind.radius() + b.kind.radius() - distance;
+                    if overlap > 0.00001 {
+                        overlap_found = true;
+                        let (nx, nz) = if distance > 0.0001 {
+                            (dx / distance, dz / distance)
+                        } else {
+                            (if a.id < b.id { 1.0 } else { -1.0 }, 0.0)
+                        };
+                        a.x = (a.x - nx * overlap * 0.5).clamp(-FIELD_EDGE, FIELD_EDGE);
+                        a.z -= nz * overlap * 0.5;
+                        b.x = (b.x + nx * overlap * 0.5).clamp(-FIELD_EDGE, FIELD_EDGE);
+                        b.z += nz * overlap * 0.5;
+                    }
+                }
+            }
+            if !overlap_found {
+                break;
+            }
+        }
+    }
     fn combat_and_move(&mut self, dt: f32) {
         // Work from one snapshot so every unit acts simultaneously and targeting is deterministic.
         let snapshot = self.units.clone();
         let buildings = self.buildings.clone();
         let mut unit_damage = vec![0.0f32; snapshot.len()];
         let mut building_damage = vec![0.0f32; buildings.len()];
-        for (i, unit) in self.units.iter_mut().enumerate() {
+        for unit in &mut self.units {
             if unit.kind == UnitKind::Collector {
                 continue;
             }
@@ -735,45 +823,15 @@ impl Game {
                     target_building.map(|(j, _)| (buildings[j].x, buildings[j].z))
                 };
                 if let Some((x, z)) = destination {
-                    let dx = x - unit.x;
-                    let dz = z - unit.z;
-                    let distance = (dx * dx + dz * dz).sqrt();
-                    if distance > 0.15 {
-                        let travel = (unit.kind.speed() * dt).min(distance);
-                        unit.x = (unit.x + dx / distance * travel).clamp(-FIELD_EDGE, FIELD_EDGE);
-                        unit.z += dz / distance * travel;
-                    }
-                }
-            }
-            // Keep friendly models apart as they converge on the same objective.
-            let mut repel_x = 0.0;
-            let mut repel_z = 0.0;
-            for (j, ally) in snapshot.iter().enumerate() {
-                if i == j || ally.team != unit.team {
-                    continue;
-                }
-                let dx = unit.x - ally.x;
-                let dz = unit.z - ally.z;
-                let d = (dx * dx + dz * dz).sqrt();
-                let spacing = if unit.kind == UnitKind::Tank || ally.kind == UnitKind::Tank {
-                    2.7
-                } else {
-                    1.6
-                };
-                if d < spacing {
-                    if d > 0.01 {
-                        repel_x += dx / d * (spacing - d) / spacing;
-                        repel_z += dz / d * (spacing - d) / spacing;
+                    let stop = if unit.state == UnitState::Gather {
+                        0.15
+                    } else if nearest_unit_distance <= nearest_building_distance {
+                        range * 0.95
                     } else {
-                        repel_x += if unit.id < ally.id { -1.0 } else { 1.0 };
-                    }
+                        (range + 2.3) * 0.95
+                    };
+                    navigation::move_toward(unit, (x, z), stop, dt, &snapshot, &buildings);
                 }
-            }
-            let repel_length = (repel_x * repel_x + repel_z * repel_z).sqrt();
-            if repel_length > 0.01 {
-                let amount = (repel_length * 2.0).min(2.0) * dt;
-                unit.x = (unit.x + repel_x / repel_length * amount).clamp(-FIELD_EDGE, FIELD_EDGE);
-                unit.z += repel_z / repel_length * amount;
             }
         }
         // Command centers provide short-range point defense to prevent runaway snowballs.
@@ -817,6 +875,15 @@ impl Game {
     }
 }
 
+fn building_half_size(kind: BuildingKind) -> (f32, f32) {
+    match kind {
+        BuildingKind::Command => (3.65, 3.3),
+        BuildingKind::Barracks => (2.85, 2.65),
+        BuildingKind::Factory => (3.225, 3.05),
+        BuildingKind::Refinery => (3.55, 2.8),
+    }
+}
+
 fn unit_index(kind: UnitKind) -> usize {
     match kind {
         UnitKind::Soldier => 0,
@@ -845,6 +912,160 @@ fn distance_sq(x: f32, z: f32, other_x: f32, other_z: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn gathering_unit_routes_around_building_and_stationary_unit() {
+        let mut g = Game::new();
+        g.units.clear();
+        g.buildings.clear();
+        g.add_building(Team::Player, BuildingKind::Factory, 0.0, 0.0, 1000.0);
+        g.spawn(Team::Player, UnitKind::Soldier);
+        g.spawn(Team::Player, UnitKind::Tank);
+        g.units[0].x = 0.0;
+        g.units[0].z = -10.0;
+        g.units[0].rally_x = 0.0;
+        g.units[0].rally_z = 12.0;
+        g.units[1].x = 4.0;
+        g.units[1].z = 0.0;
+        g.units[1].rally_x = 4.0;
+        g.units[1].rally_z = 0.0;
+        for _ in 0..240 {
+            g.combat_and_move(0.05);
+            g.resolve_collisions();
+        }
+        let unit = &g.units[0];
+        assert!(
+            distance_sq(unit.x, unit.z, 0.0, 12.0) < 1.0,
+            "unit failed to reach rally: {}, {}",
+            unit.x,
+            unit.z
+        );
+    }
+
+    #[test]
+    fn units_passing_in_opposite_directions_do_not_deadlock() {
+        let mut g = Game::new();
+        g.units.clear();
+        g.buildings.clear();
+        for _ in 0..2 {
+            g.spawn(Team::Player, UnitKind::Tank);
+        }
+        g.units[0].x = 0.0;
+        g.units[0].z = -9.0;
+        g.units[0].rally_x = 0.0;
+        g.units[0].rally_z = 9.0;
+        g.units[1].x = 0.0;
+        g.units[1].z = 9.0;
+        g.units[1].rally_x = 0.0;
+        g.units[1].rally_z = -9.0;
+        for _ in 0..240 {
+            g.combat_and_move(0.05);
+            g.resolve_collisions();
+        }
+        assert!(
+            g.units[0].z > 7.0 && g.units[1].z < -7.0,
+            "units stalled: ({}, {}), ({}, {})",
+            g.units[0].x,
+            g.units[0].z,
+            g.units[1].x,
+            g.units[1].z
+        );
+    }
+
+    #[test]
+    fn attacking_unit_routes_around_friendly_building() {
+        let mut g = Game::new();
+        g.units.clear();
+        g.buildings.clear();
+        g.add_building(Team::Player, BuildingKind::Command, 0.0, 0.0, 1400.0);
+        g.add_building(Team::Enemy, BuildingKind::Factory, 0.0, 24.0, 1000.0);
+        g.spawn(Team::Player, UnitKind::Soldier);
+        g.units[0].state = UnitState::Attack;
+        g.units[0].x = 0.0;
+        g.units[0].z = -12.0;
+        for _ in 0..220 {
+            g.combat_and_move(0.05);
+            g.resolve_collisions();
+        }
+        assert!(
+            g.buildings[1].hp < g.buildings[1].max_hp,
+            "unit did not reach firing range: {}, {}",
+            g.units[0].x,
+            g.units[0].z
+        );
+    }
+
+    #[test]
+    fn collision_separates_all_units_and_building_footprints() {
+        let mut g = Game::new();
+        g.units.clear();
+        g.spawn(Team::Player, UnitKind::Collector);
+        g.spawn(Team::Enemy, UnitKind::Tank);
+        for unit in &mut g.units {
+            unit.x = 0.0;
+            unit.z = 39.0;
+        }
+        g.resolve_collisions();
+        let a = &g.units[0];
+        let b = &g.units[1];
+        assert!(
+            distance_sq(a.x, a.z, b.x, b.z).sqrt() >= a.kind.radius() + b.kind.radius() - 0.001
+        );
+        for unit in &g.units {
+            let dx = (unit.x.abs() - 3.65).max(0.0);
+            let dz = ((unit.z - 43.0).abs() - 3.3).max(0.0);
+            assert!((dx * dx + dz * dz).sqrt() >= unit.kind.radius() - 0.001);
+        }
+    }
+
+    #[test]
+    fn collectors_on_both_teams_make_repeated_deliveries_in_traffic() {
+        let mut g = Game::new();
+        g.units.clear();
+        for team in [Team::Player, Team::Enemy] {
+            g.spawn(team, UnitKind::Collector);
+            g.spawn(team, UnitKind::Collector);
+        }
+        g.resolve_collisions();
+        g.credits = 0.0;
+        g.ai_credits = 0.0;
+        for _ in 0..2400 {
+            g.harvest_and_unload(0.05);
+            g.resolve_collisions();
+        }
+        assert!(
+            g.credits >= 200.0,
+            "player collectors delivered {}",
+            g.credits
+        );
+        assert!(
+            g.ai_credits >= 200.0,
+            "enemy collectors delivered {}",
+            g.ai_credits
+        );
+    }
+
+    #[test]
+    fn collector_can_deliver_with_collisions_enabled() {
+        let mut g = Game::new();
+        g.units.clear();
+        g.spawn(Team::Player, UnitKind::Collector);
+        g.credits = 0.0;
+        g.ai_decision_timer = 1000.0;
+        g.ai_wave_timer = 1000.0;
+        for _ in 0..800 {
+            g.update(0.05);
+        }
+        // Passive income is 960 credits; a delivery adds up to 100.
+        assert!(
+            g.credits > 1000.0,
+            "collector must complete a delivery: {}, position {}, {}, cargo {}",
+            g.credits,
+            g.units[0].x,
+            g.units[0].z,
+            g.units[0].cargo
+        );
+    }
+
     #[test]
     fn ore_is_seeded_symmetric_and_clear_of_starting_buildings() {
         for seed in 0..128 {
