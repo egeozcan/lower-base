@@ -8,6 +8,8 @@ const CELL: f32 = 1.0;
 const WIDTH: i32 = 35;
 const HEIGHT: i32 = 131;
 const MIN_Z: f32 = -65.0;
+// Reach past a building corner when contact blocks the adjacent grid cells.
+const ESCAPE_CELLS: i32 = 6;
 
 #[derive(Clone, Default)]
 pub(super) struct Navigation {
@@ -98,6 +100,11 @@ fn line_clear(
     // A unit can already be touching an obstacle. Permit it to leave that
     // contact before requiring the rest of the route to be clear.
     let mut escaped = clear(from, unit, units, buildings);
+    let mut overlap = if escaped {
+        0.0
+    } else {
+        contact_depth(from, unit, units, buildings)
+    };
     for i in 1..=steps {
         let t = i as f32 / steps as f32;
         let p = (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
@@ -105,9 +112,38 @@ fn line_clear(
             escaped = true;
         } else if escaped {
             return false;
+        } else {
+            let next_overlap = contact_depth(p, unit, units, buildings);
+            // Leaving contact must make progress out of the obstacle. Allowing
+            // an initially blocked segment to cross it pins the unit against
+            // the wall again every time collisions are resolved.
+            if next_overlap > overlap + 0.001 {
+                return false;
+            }
+            overlap = next_overlap;
         }
     }
     escaped
+}
+
+fn contact_depth(point: (f32, f32), unit: &Unit, units: &[Unit], buildings: &[Building]) -> f32 {
+    let radius = unit.kind.radius() + 0.12;
+    let mut depth: f32 = 0.0;
+    for b in buildings.iter().filter(|b| b.hp > 0.0) {
+        let (hx, hz) = building_half_size(b.kind);
+        let dx = ((point.0 - b.x).abs() - hx).max(0.0);
+        let dz = ((point.1 - b.z).abs() - hz).max(0.0);
+        depth = depth.max(radius - (dx * dx + dz * dz).sqrt());
+    }
+    for other in units
+        .iter()
+        .filter(|other| other.id != unit.id && other.hp > 0.0)
+    {
+        depth = depth.max(
+            radius + other.kind.radius() - distance_sq(point.0, point.1, other.x, other.z).sqrt(),
+        );
+    }
+    depth
 }
 
 fn route(
@@ -125,10 +161,36 @@ fn route(
     let mut open = BinaryHeap::new();
     let heuristic = |p: (f32, f32)| (distance_sq(p.0, p.1, goal.0, goal.1).sqrt() - stop).max(0.0);
     costs[start] = 0.0;
-    open.push(Entry {
-        index: start,
-        score: heuristic((unit.x, unit.z)),
-    });
+    let from = (unit.x, unit.z);
+    if clear(from, unit, units, buildings) && clear(position(start), unit, units, buildings) {
+        open.push(Entry {
+            index: start,
+            score: heuristic(from),
+        });
+    } else {
+        // Contact can leave the rounded start cell and all its immediate
+        // neighbors blocked by the navigation margin. Connect the actual
+        // position to nearby clear cells through a verified escape segment.
+        for z in (sz - ESCAPE_CELLS).max(0)..=(sz + ESCAPE_CELLS).min(HEIGHT - 1) {
+            for x in (sx - ESCAPE_CELLS).max(0)..=(sx + ESCAPE_CELLS).min(WIDTH - 1) {
+                let next = index(x, z);
+                let q = position(next);
+                if next == start
+                    || !clear(q, unit, units, buildings)
+                    || !line_clear(from, q, unit, units, buildings)
+                {
+                    continue;
+                }
+                let cost = distance_sq(from.0, from.1, q.0, q.1).sqrt();
+                costs[next] = cost;
+                parents[next] = start;
+                open.push(Entry {
+                    index: next,
+                    score: cost + heuristic(q),
+                });
+            }
+        }
+    }
     let mut best = start;
     let mut best_h = heuristic((unit.x, unit.z));
     let mut expanded = 0;
@@ -167,7 +229,7 @@ fn route(
             (1, 1),
         ] {
             let (x, z) = (cx + dx, cz + dz);
-            if x < 0 || x >= WIDTH || z < 0 || z >= HEIGHT {
+            if !(0..WIDTH).contains(&x) || !(0..HEIGHT).contains(&z) {
                 continue;
             }
             let next = index(x, z);

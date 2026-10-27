@@ -1593,6 +1593,67 @@ mod tests {
     }
 
     #[test]
+    fn collector_escapes_building_contact_after_unloading() {
+        for team in [Team::Player, Team::Enemy] {
+            let mut g = Game::with_seed(26);
+            g.units.clear();
+            g.spawn(team, UnitKind::Collector);
+            // A position reached after unloading between the command center,
+            // factory and refinery. Collision resolution used to pin it here.
+            g.units[0].x = 5.2535853;
+            g.units[0].z = if team == Team::Player {
+                46.688587
+            } else {
+                -46.688587
+            };
+            for _ in 0..200 {
+                g.harvest_and_unload(0.05);
+                g.resolve_collisions();
+            }
+            let u = &g.units[0];
+            assert!(u.cargo > 0.0, "collector stalled at ({}, {})", u.x, u.z);
+        }
+    }
+
+    #[test]
+    fn collectors_keep_delivering_across_seeded_ore_layouts() {
+        // Seeds 5 and 26 reproduce stalls at the command center and refinery;
+        // keep additional layouts here without making the regular suite slow.
+        for seed in [0, 5, 26, 73] {
+            let mut g = Game::with_seed(seed);
+            for team in [Team::Player, Team::Enemy] {
+                for _ in 0..4 {
+                    g.spawn(team, UnitKind::Collector);
+                }
+            }
+            g.resolve_collisions();
+            let mut deliveries = vec![0; g.units.len()];
+            let mut last_delivery = vec![0; g.units.len()];
+            for step in 0..3600 {
+                let cargo: Vec<_> = g.units.iter().map(|u| u.cargo).collect();
+                g.harvest_and_unload(0.05);
+                g.resolve_collisions();
+                for (i, u) in g.units.iter().enumerate() {
+                    if cargo[i] > 0.0 && u.cargo == 0.0 {
+                        deliveries[i] += 1;
+                        last_delivery[i] = step;
+                    }
+                }
+            }
+            for (i, u) in g
+                .units
+                .iter()
+                .enumerate()
+                .filter(|(_, u)| u.kind == UnitKind::Collector)
+            {
+                assert!(deliveries[i] >= 2 && last_delivery[i] > 2400,
+                    "seed {seed}: {:?} collector {} stalled at ({}, {}), cargo {}, returning {}, deliveries {}",
+                    u.team, u.id, u.x, u.z, u.cargo, u.returning, deliveries[i]);
+            }
+        }
+    }
+
+    #[test]
     fn collector_can_deliver_with_collisions_enabled() {
         let mut g = Game::new();
         g.units.clear();
