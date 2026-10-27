@@ -39,11 +39,12 @@
       <aside class="panel left-panel">
         <p id="spectator-note" class="spectator-note" hidden>DEMO · BLUE VS RED<br><span>Two computer commanders control production and attacks. Watch the battle unfold.</span></p>
         <div class="mode-switch" role="group" aria-label="Deployment mode">
-          <button id="gather" class="mode active" type="button" title="New units gather at your base"><span class="mode-icon">▥</span><span><strong>GATHER</strong></span><span class="mode-key">1</span></button>
-          <button id="attack" class="mode" type="button" title="Send all gathered units and new units north; attacks cannot be recalled"><span class="mode-icon">➤</span><span><strong>ATTACK</strong></span><span class="mode-key">2</span></button>
+          <button id="gather" class="mode active" type="button" title="Release sheltered units and gather new troops at your base"><span class="mode-icon">▥</span><span><strong>GATHER</strong></span><span class="mode-key">1</span></button>
+          <button id="attack" class="mode" type="button" title="Release sheltered units and send all troops into battle"><span class="mode-icon">➤</span><span><strong>ATTACK</strong></span><span class="mode-key">2</span></button>
+          <button id="retreat" class="mode" type="button" title="Recall troops to your rally area; new units stay inside buildings until Gather or Attack (R)"><span class="mode-icon">↶</span><span><strong>RETREAT</strong></span><span class="mode-key">R</span></button>
         </div>
         <div id="production" class="production"></div>
-        <div class="selection-box"><div class="selection-top"><span>SELECTED</span><strong id="selected-count">00</strong></div><button id="send-selected" class="send-button" type="button" title="Send selected units north; attacks cannot be recalled" disabled><span>↗</span> SEND <span>↗</span></button></div>
+        <div class="selection-box"><div class="selection-top"><span>SELECTED</span><strong id="selected-count">00</strong></div><button id="send-selected" class="send-button" type="button" title="Send selected units into battle" disabled><span>↗</span> SEND <span>↗</span></button></div>
       </aside>
 
       <section class="battlefield" aria-label="3D battlefield">

@@ -504,6 +504,7 @@ export class BattlefieldRenderer {
         }
       }
       entity.group.position.set(item.x, 0, item.z);
+      entity.group.visible = item.state !== 'garrison';
       if (entity.kind === 'tank') {
         const recoil = Math.max(0, (entity.recoilUntil - performance.now()) / 240);
         const model = entity.group.children[0];
@@ -517,7 +518,7 @@ export class BattlefieldRenderer {
       entity.hp.userData.fill.position.x = -(1 - fraction) * (isUnit ? 1.8 : 4.5) / 2;
       entity.hp.userData.fill.material.color.setHex(fraction > .5 ? 0x76e6a3 : fraction > .25 ? 0xf8c65f : 0xff7065);
       entity.hp.quaternion.copy(this.camera.quaternion);
-      if ((!isUnit || ['tank', 'collector', 'demolition'].includes(item.kind)) && fraction < .5) {
+      if (entity.group.visible && (!isUnit || ['tank', 'collector', 'demolition'].includes(item.kind)) && fraction < .5) {
         entity.emission += dt;
         if (entity.emission > .18) {
           entity.emission = 0;
@@ -543,7 +544,7 @@ export class BattlefieldRenderer {
       this.combatEffects.explode(blast);
     }
     for (const [key, entity] of this.entities) if (!alive.has(key)) {
-      if (!restarting) this.combatEffects.destroy(entity);
+      if (!restarting && entity.group.visible) this.combatEffects.destroy(entity);
       this.removeEntity(entity);
       this.entities.delete(key);
     }

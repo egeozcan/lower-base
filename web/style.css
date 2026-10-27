@@ -111,3 +111,16 @@
 @media(max-width:380px){.match-label{display:none}.match-actions{margin-left:auto}.top-right{margin-left:0}}
 
 .help-document{height:auto;overflow:auto}
+
+/* Three deployment commands share the same compact command row. */
+.mode-switch{grid-template-columns:repeat(3,minmax(0,1fr))}
+.mode{padding:11px 5px;gap:4px;justify-content:center}
+.mode strong{font-size:14px}.mode-icon{font-size:16px}.mode-key{display:none}
+#retreat.active{border-color:#91b9cd;background:linear-gradient(#496273,#2e4651);color:#e0f3ff}
+#retreat .mode-icon{color:#aed3e5}
+@media(max-width:700px){
+  .left-panel{grid-template-columns:minmax(0,3fr) minmax(0,1.2fr)}
+  .mode{padding:6px 3px}.mode strong{font-size:13px;letter-spacing:0}.mode-icon{display:none}
+  .selection-box{gap:4px;padding:5px 4px}.selection-top>span{display:none}
+  .selection-top strong{font-size:16px}.selection-box .send-button{padding:6px 3px}
+}

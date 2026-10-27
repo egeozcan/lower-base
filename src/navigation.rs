@@ -78,7 +78,7 @@ fn clear(point: (f32, f32), unit: &Unit, units: &[Unit], buildings: &[Building])
     }
     for other in units
         .iter()
-        .filter(|other| other.id != unit.id && other.hp > 0.0)
+        .filter(|other| other.id != unit.id && other.on_field())
     {
         let separation = radius + other.kind.radius();
         if distance_sq(point.0, point.1, other.x, other.z) < separation * separation {
@@ -137,7 +137,7 @@ fn contact_depth(point: (f32, f32), unit: &Unit, units: &[Unit], buildings: &[Bu
     }
     for other in units
         .iter()
-        .filter(|other| other.id != unit.id && other.hp > 0.0)
+        .filter(|other| other.id != unit.id && other.on_field())
     {
         depth = depth.max(
             radius + other.kind.radius() - distance_sq(point.0, point.1, other.x, other.z).sqrt(),

@@ -130,6 +130,7 @@ pub enum UnitState {
     Gather,
     Attack,
     Harvest,
+    Garrison,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -162,6 +163,7 @@ pub struct Unit {
     pub state: UnitState,
     pub cargo: f32,
     pub returning: bool,
+    pub garrison: Option<u32>,
     #[serde(skip)]
     cooldown: f32,
     #[serde(skip)]
@@ -172,6 +174,12 @@ pub struct Unit {
     rally_x: f32,
     #[serde(skip)]
     rally_z: f32,
+}
+
+impl Unit {
+    fn on_field(&self) -> bool {
+        self.hp > 0.0 && self.state != UnitState::Garrison
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -192,6 +200,7 @@ pub struct Building {
 pub enum Mode {
     Gather,
     Attack,
+    Retreat,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -231,6 +240,7 @@ pub struct Game {
     pub demo: bool,
     pub credits: f32,
     pub mode: Mode,
+    pub enemy_mode: Mode,
     pub outcome: Outcome,
     pub units: Vec<Unit>,
     pub buildings: Vec<Building>,
@@ -281,6 +291,7 @@ impl Game {
             demo: false,
             credits: 500.0,
             mode: Mode::Gather,
+            enemy_mode: Mode::Gather,
             outcome: Outcome::Playing,
             units: Vec::new(),
             buildings: Vec::new(),
@@ -381,14 +392,28 @@ impl Game {
         let index = self
             .units
             .iter()
-            .filter(|u| u.team == team && u.state == UnitState::Gather)
+            .filter(|u| {
+                u.team == team && matches!(u.state, UnitState::Gather | UnitState::Garrison)
+            })
             .count();
         let x = ((index % 7) as f32 - 3.0) * 3.4;
         let row = (index / 7).min(3) as f32;
         let direction = if team == Team::Player { 1.0 } else { -1.0 };
-        let state = if kind == UnitKind::Collector {
+        let mode = self.team_mode(team);
+        let shelter = self
+            .buildings
+            .iter()
+            .find(|b| b.team == team && b.kind == kind.production_building() && b.hp > 0.0);
+        let garrison = if mode == Mode::Retreat {
+            shelter.map(|b| b.id)
+        } else {
+            None
+        };
+        let state = if garrison.is_some() {
+            UnitState::Garrison
+        } else if kind == UnitKind::Collector {
             UnitState::Harvest
-        } else if team == Team::Player && self.mode == Mode::Attack {
+        } else if mode == Mode::Attack {
             UnitState::Attack
         } else {
             UnitState::Gather
@@ -397,13 +422,24 @@ impl Game {
             id,
             team,
             kind,
-            x: if kind == UnitKind::Collector { 10.0 } else { x },
-            z: direction * (35.0 + row * 2.2),
+            x: if garrison.is_some() {
+                shelter.unwrap().x
+            } else if kind == UnitKind::Collector {
+                10.0
+            } else {
+                x
+            },
+            z: if garrison.is_some() {
+                shelter.unwrap().z
+            } else {
+                direction * (35.0 + row * 2.2)
+            },
             hp: kind.health(),
             max_hp: kind.health(),
             state,
             cargo: 0.0,
             returning: false,
+            garrison,
             cooldown: 0.2,
             detonated: false,
             navigation: navigation::Navigation::default(),
@@ -415,21 +451,71 @@ impl Game {
         if self.demo || self.outcome != Outcome::Playing {
             return;
         }
-        match mode {
-            "attack" => {
-                self.mode = Mode::Attack;
-                for u in &mut self.units {
-                    if u.team == Team::Player && u.kind != UnitKind::Collector {
-                        u.state = UnitState::Attack;
-                    }
-                }
-            }
-            "gather" => self.mode = Mode::Gather,
-            _ => {}
+        let mode = match mode {
+            "attack" => Mode::Attack,
+            "gather" => Mode::Gather,
+            "retreat" => Mode::Retreat,
+            _ => return,
+        };
+        self.set_team_mode(Team::Player, mode);
+    }
+    fn team_mode(&self, team: Team) -> Mode {
+        if team == Team::Player {
+            self.mode
+        } else {
+            self.enemy_mode
         }
     }
+    fn set_team_mode(&mut self, team: Team, mode: Mode) {
+        if team == Team::Player {
+            self.mode = mode;
+        } else {
+            self.enemy_mode = mode;
+        }
+        for u in self
+            .units
+            .iter_mut()
+            .filter(|u| u.team == team && u.hp > 0.0)
+        {
+            if u.state == UnitState::Garrison {
+                if mode == Mode::Retreat {
+                    continue;
+                }
+                // Deploy through the front door, outside the building footprint.
+                if let Some(b) = self
+                    .buildings
+                    .iter()
+                    .find(|b| Some(b.id) == u.garrison && b.hp > 0.0)
+                {
+                    let direction = if team == Team::Player { 1.0 } else { -1.0 };
+                    let (_, half_z) = building_half_size(b.kind);
+                    u.x = b.x;
+                    u.z = b.z - direction * (half_z + u.kind.radius() + 0.3);
+                } else {
+                    u.hp = 0.0;
+                    continue;
+                }
+                u.garrison = None;
+                u.state = if u.kind == UnitKind::Collector {
+                    UnitState::Harvest
+                } else {
+                    UnitState::Gather
+                };
+                u.navigation = navigation::Navigation::default();
+            }
+            if u.kind != UnitKind::Collector {
+                if mode == Mode::Attack {
+                    u.state = UnitState::Attack;
+                }
+                if mode == Mode::Retreat {
+                    u.state = UnitState::Gather;
+                }
+            }
+        }
+        self.resolve_collisions();
+    }
     pub fn attack_selected(&mut self, ids: &[u32]) {
-        if self.demo || self.outcome != Outcome::Playing {
+        if self.demo || self.outcome != Outcome::Playing || self.mode == Mode::Retreat {
             return;
         }
         for u in &mut self.units {
@@ -688,12 +774,56 @@ impl Game {
             .units
             .iter()
             .any(|u| u.team == opponent && u.state == UnitState::Attack && u.z * direction < -10.0);
+        // Compare the incoming force with units available on our half of the map,
+        // including sheltered production. Different entry/exit thresholds keep
+        // the commander from switching modes on every decision.
+        let strength = |u: &Unit| u.kind.cost() * (u.hp / u.max_hp).clamp(0.0, 1.0);
+        let pressure: f32 = self
+            .units
+            .iter()
+            .filter(|u| {
+                u.team == opponent
+                    && u.on_field()
+                    && u.kind != UnitKind::Collector
+                    && u.state == UnitState::Attack
+                    && u.z * direction < -10.0
+            })
+            .map(strength)
+            .sum();
+        let defense: f32 = self
+            .units
+            .iter()
+            .filter(|u| {
+                u.team == team
+                    && u.hp > 0.0
+                    && u.kind != UnitKind::Collector
+                    && u.z * direction < 5.0
+            })
+            .map(strength)
+            .sum();
+        let retreating = self.team_mode(team) == Mode::Retreat;
+        let can_rebuild = self.alive_building(team, BuildingKind::Barracks)
+            || self.alive_building(team, BuildingKind::Factory);
+        let should_retreat = can_rebuild
+            && pressure > 0.0
+            && pressure > defense * if retreating { 1.05 } else { 1.5 };
+        if should_retreat && !retreating {
+            self.set_team_mode(team, Mode::Retreat);
+        } else if retreating && !should_retreat {
+            self.set_team_mode(team, Mode::Gather);
+        }
         let reserves = self
             .units
             .iter()
-            .filter(|u| u.team == team && u.state == UnitState::Gather)
+            .filter(|u| {
+                u.team == team
+                    && u.kind != UnitKind::Collector
+                    && matches!(u.state, UnitState::Gather | UnitState::Garrison)
+            })
             .count();
-        if threatened || (wave_timer <= 0.0 && (reserves >= 3 || wave_timer <= -4.0)) {
+        if !should_retreat
+            && (threatened || (wave_timer <= 0.0 && (reserves >= 3 || wave_timer <= -4.0)))
+        {
             for u in &mut self.units {
                 if u.team == team && u.state == UnitState::Gather {
                     u.state = UnitState::Attack;
@@ -721,7 +851,9 @@ impl Game {
             UnitKind::Soldier
         };
         if team == Team::Enemy {
-            self.ai_status = if threatened {
+            self.ai_status = if should_retreat {
+                "RETREATING TO REGROUP"
+            } else if threatened {
                 "INTERCEPTING YOUR ADVANCE"
             } else if player[2] > player[0] && player[2] >= player[1] {
                 "COUNTERING YOUR ARMOR"
@@ -794,7 +926,7 @@ impl Game {
     fn harvest_and_unload(&mut self, dt: f32) {
         let snapshot = self.units.clone();
         for unit in &mut self.units {
-            if unit.kind != UnitKind::Collector || unit.hp <= 0.0 {
+            if unit.kind != UnitKind::Collector || !unit.on_field() {
                 continue;
             }
             let refinery = self
@@ -864,7 +996,7 @@ impl Game {
         for _ in 0..48 {
             let mut overlap_found = false;
             for unit in &mut self.units {
-                if unit.hp <= 0.0 {
+                if !unit.on_field() {
                     continue;
                 }
                 let radius = unit.kind.radius();
@@ -900,10 +1032,10 @@ impl Game {
             for i in 0..self.units.len() {
                 let (left, right) = self.units.split_at_mut(i + 1);
                 let a = &mut left[i];
-                if a.hp <= 0.0 {
+                if !a.on_field() {
                     continue;
                 }
-                for b in right.iter_mut().filter(|u| u.hp > 0.0) {
+                for b in right.iter_mut().filter(|u| u.on_field()) {
                     let (dx, dz) = (b.x - a.x, b.z - a.z);
                     let distance = (dx * dx + dz * dz).sqrt();
                     let overlap = a.kind.radius() + b.kind.radius() - distance;
@@ -933,15 +1065,33 @@ impl Game {
         let mut unit_damage = vec![0.0f32; snapshot.len()];
         let mut building_damage = vec![0.0f32; buildings.len()];
         let mut detonating = Vec::new();
+        let player_retreat = self.mode == Mode::Retreat;
+        let enemy_retreat = self.enemy_mode == Mode::Retreat;
         for (unit_index, unit) in self.units.iter_mut().enumerate() {
-            if unit.hp <= 0.0 || unit.kind == UnitKind::Collector {
+            if !unit.on_field() || unit.kind == UnitKind::Collector {
                 continue;
             }
             unit.cooldown = (unit.cooldown - dt).max(0.0);
+            let retreating = if unit.team == Team::Player {
+                player_retreat
+            } else {
+                enemy_retreat
+            };
+            if retreating && distance_sq(unit.x, unit.z, unit.rally_x, unit.rally_z) > 1.0 {
+                navigation::move_toward(
+                    unit,
+                    (unit.rally_x, unit.rally_z),
+                    0.15,
+                    dt,
+                    &snapshot,
+                    &buildings,
+                );
+                continue;
+            }
             let target_unit = snapshot
                 .iter()
                 .enumerate()
-                .filter(|(_, v)| v.team != unit.team && v.hp > 0.0)
+                .filter(|(_, v)| v.team != unit.team && v.on_field())
                 .map(|(j, v)| (j, distance_sq(unit.x, unit.z, v.x, v.z)))
                 .min_by(|a, b| a.1.total_cmp(&b.1));
             let target_building = buildings
@@ -960,7 +1110,7 @@ impl Game {
                 .enumerate()
                 .filter(|(_, v)| {
                     v.team != unit.team
-                        && v.hp > 0.0
+                        && v.on_field()
                         && distance_sq(unit.x, unit.z, v.x, v.z) <= range * range
                 })
                 .max_by(|(_, a), (_, b)| {
@@ -1058,7 +1208,9 @@ impl Game {
                     .iter()
                     .enumerate()
                     .filter(|(_, u)| {
-                        u.team != b.team && distance_sq(b.x, b.z, u.x, u.z) < 11.0 * 11.0
+                        u.team != b.team
+                            && u.on_field()
+                            && distance_sq(b.x, b.z, u.x, u.z) < 11.0 * 11.0
                     })
                     .map(|(j, u)| (j, distance_sq(b.x, b.z, u.x, u.z)))
                     .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -1094,10 +1246,12 @@ impl Game {
         // Resolve deaths before cleanup, including trucks killed by another blast.
         // Mark each source first so simultaneous attack/death only explodes once.
         loop {
-            let source = self
-                .units
-                .iter()
-                .position(|u| u.kind == UnitKind::Demolition && u.hp <= 0.0 && !u.detonated);
+            let source = self.units.iter().position(|u| {
+                u.kind == UnitKind::Demolition
+                    && u.state != UnitState::Garrison
+                    && u.hp <= 0.0
+                    && !u.detonated
+            });
             let Some(i) = source else { break };
             self.units[i].detonated = true;
             let (x, z) = (self.units[i].x, self.units[i].z);
@@ -1110,7 +1264,7 @@ impl Game {
             });
             self.next_shot_id += 1;
             for u in &mut self.units {
-                if u.hp > 0.0 {
+                if u.on_field() {
                     u.hp -= demolition_damage(distance_sq(x, z, u.x, u.z).sqrt());
                 }
             }
@@ -1121,6 +1275,17 @@ impl Game {
                     let dz = ((z - b.z).abs() - hz).max(0.0);
                     b.hp -= demolition_damage((dx * dx + dz * dz).sqrt());
                 }
+            }
+        }
+        // Occupants are protected while their building stands and lost with it.
+        for u in &mut self.units {
+            if u.state == UnitState::Garrison
+                && !self
+                    .buildings
+                    .iter()
+                    .any(|b| Some(b.id) == u.garrison && b.hp > 0.0)
+            {
+                u.hp = 0.0;
             }
         }
         for (before, after) in snapshot.iter().zip(&self.units) {
@@ -2010,6 +2175,231 @@ mod tests {
             .iter()
             .any(|u| u.team == Team::Enemy && u.kind == UnitKind::Collector));
     }
+    #[test]
+    fn retreat_recalls_attackers_under_fire_without_recalling_active_collectors() {
+        let mut g = isolated_units(&[
+            (Team::Player, UnitKind::Tank, 0.0, 0.0),
+            (Team::Enemy, UnitKind::Soldier, 0.0, -5.0),
+            (Team::Player, UnitKind::Collector, 12.0, 25.0),
+        ]);
+        g.units[0].rally_z = 27.0;
+        g.set_mode("attack");
+        let collector = g.units[2].clone();
+        g.set_mode("retreat");
+        assert_eq!(g.units[0].state, UnitState::Gather);
+        assert_eq!(g.units[1].state, UnitState::Gather);
+        assert_eq!(g.units[2].state, UnitState::Harvest);
+        assert_eq!((g.units[2].x, g.units[2].z), (collector.x, collector.z));
+        let id = g.units[0].id;
+        g.attack_selected(&[id]);
+        assert_eq!(g.units[0].state, UnitState::Gather);
+        g.combat_and_move(0.05);
+        assert!(
+            g.units[0].z > 0.0,
+            "retreat must move even with a target in firing range"
+        );
+        assert!(!g.shots.iter().any(|s| s.source_id == id));
+        for _ in 0..120 {
+            g.combat_and_move(0.05);
+            g.resolve_collisions();
+        }
+        assert!((g.units[0].z - 27.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn retreat_holds_completed_production_and_releases_it_in_either_mode() {
+        for release in ["gather", "attack"] {
+            let mut g = Game::new();
+            g.ai_decision_timer = 1000.0;
+            g.credits = 2000.0;
+            g.set_mode("retreat");
+            let first_id = g.next_id;
+            for kind in ["soldier", "rocket", "tank", "collector", "demolition"] {
+                g.train(kind);
+            }
+            for _ in 0..320 {
+                g.update(0.05);
+            }
+            let sheltered: Vec<_> = g
+                .units
+                .iter()
+                .filter(|u| u.id >= first_id)
+                .cloned()
+                .collect();
+            assert_eq!(sheltered.len(), 5);
+            for u in &sheltered {
+                assert_eq!(u.state, UnitState::Garrison);
+                assert_eq!(u.hp, u.max_hp);
+                assert_eq!(u.cargo, 0.0);
+                let host = g
+                    .buildings
+                    .iter()
+                    .find(|b| Some(b.id) == u.garrison)
+                    .unwrap();
+                assert_eq!(host.kind, u.kind.production_building());
+                assert_eq!((u.x, u.z), (host.x, host.z));
+            }
+            g.set_mode("retreat");
+            let ids: Vec<_> = sheltered.iter().map(|u| u.id).collect();
+            g.attack_selected(&ids);
+            assert!(g
+                .units
+                .iter()
+                .filter(|u| ids.contains(&u.id))
+                .all(|u| u.state == UnitState::Garrison));
+            g.set_mode(release);
+            for u in g.units.iter().filter(|u| ids.contains(&u.id)) {
+                assert_eq!(u.garrison, None);
+                assert_eq!(
+                    u.state,
+                    if u.kind == UnitKind::Collector {
+                        UnitState::Harvest
+                    } else if release == "attack" {
+                        UnitState::Attack
+                    } else {
+                        UnitState::Gather
+                    }
+                );
+                assert_eq!(u.hp, u.max_hp);
+                for b in &g.buildings {
+                    let (hx, hz) = building_half_size(b.kind);
+                    let dx = ((u.x - b.x).abs() - hx).max(0.0);
+                    let dz = ((u.z - b.z).abs() - hz).max(0.0);
+                    assert!(dx * dx + dz * dz >= (u.kind.radius() - 0.01).powi(2));
+                }
+            }
+            assert_eq!(g.units.iter().filter(|u| ids.contains(&u.id)).count(), 5);
+        }
+    }
+
+    #[test]
+    fn sheltered_units_are_protected_and_lost_only_with_their_own_building() {
+        let mut g = Game::new();
+        g.units.clear();
+        g.set_mode("retreat");
+        g.spawn(Team::Player, UnitKind::Soldier);
+        g.spawn(Team::Player, UnitKind::Demolition);
+        g.spawn(Team::Player, UnitKind::Collector);
+        let barracks = g.units[0].garrison.unwrap();
+        g.add_building(Team::Enemy, BuildingKind::Command, -10.0, 35.0, 1400.0);
+        g.spawn(Team::Enemy, UnitKind::Demolition);
+        let truck = g.units.last_mut().unwrap();
+        truck.x = -10.0;
+        truck.z = 40.0;
+        truck.hp = 0.0;
+        g.combat_and_move(0.05);
+        assert_eq!(
+            g.units[0].hp, g.units[0].max_hp,
+            "blast must not hit occupants"
+        );
+        assert!(
+            g.shots.is_empty(),
+            "sheltered units cannot fire or be targeted by point defense"
+        );
+        assert_eq!(g.explosions.len(), 1);
+        g.buildings
+            .iter_mut()
+            .find(|b| b.id == barracks)
+            .unwrap()
+            .hp = 0.0;
+        g.combat_and_move(0.05);
+        assert_eq!(g.units[0].hp, 0.0);
+        assert_eq!(g.units[1].hp, g.units[1].max_hp);
+        assert_eq!(g.units[2].hp, g.units[2].max_hp);
+        assert_eq!(g.enemy_kills, 1);
+        for b in g.buildings.iter_mut().filter(|b| b.team == Team::Player) {
+            b.hp = 0.0;
+        }
+        g.ai_decision_timer = 1000.0;
+        g.update(0.05);
+        assert_eq!(g.outcome, Outcome::Defeat);
+        assert_eq!(
+            g.explosions.len(),
+            1,
+            "a sheltered truck is lost without detonating"
+        );
+    }
+
+    #[test]
+    fn both_ai_commanders_retreat_when_overwhelmed_and_release_regrouped_reserves() {
+        for team in [Team::Player, Team::Enemy] {
+            let mut g = Game::demo_with_seed(1941);
+            let opponent = if team == Team::Player {
+                Team::Enemy
+            } else {
+                Team::Player
+            };
+            let direction = if team == Team::Player { -1.0 } else { 1.0 };
+            for _ in 0..6 {
+                g.spawn(opponent, UnitKind::Tank);
+            }
+            for u in &mut g.units {
+                if u.team == opponent {
+                    u.state = UnitState::Attack;
+                    u.z = -18.0 * direction;
+                } else {
+                    u.state = UnitState::Attack;
+                }
+            }
+            g.ai_decide_for(team);
+            assert_eq!(g.team_mode(team), Mode::Retreat);
+            assert!(g
+                .units
+                .iter()
+                .filter(|u| u.team == team)
+                .all(|u| u.state == UnitState::Gather));
+            g.spawn(team, UnitKind::Tank);
+            let reserve_id = g.units.last().unwrap().id;
+            assert_eq!(g.units.last().unwrap().state, UnitState::Garrison);
+            g.ai_decide_for(team);
+            assert_eq!(g.team_mode(team), Mode::Retreat);
+            // Rebuilding enough strength should release reserves even while the
+            // incoming army remains on our side of the map.
+            for _ in 0..7 {
+                g.spawn(team, UnitKind::Tank);
+            }
+            g.ai_decide_for(team);
+            assert_eq!(g.team_mode(team), Mode::Gather);
+            assert!(g
+                .units
+                .iter()
+                .filter(|u| u.team == team)
+                .all(|u| u.state == UnitState::Attack));
+            assert!(g
+                .units
+                .iter()
+                .any(|u| u.id == reserve_id && u.garrison.is_none()));
+        }
+    }
+
+    #[test]
+    fn ai_releases_reserves_when_threat_passes_or_production_is_lost() {
+        for loses_production in [false, true] {
+            let mut g = Game::new();
+            g.set_team_mode(Team::Enemy, Mode::Retreat);
+            g.spawn(Team::Enemy, UnitKind::Soldier);
+            if loses_production {
+                for _ in 0..10 {
+                    g.spawn(Team::Player, UnitKind::Tank);
+                }
+                for u in g.units.iter_mut().filter(|u| u.team == Team::Player) {
+                    u.state = UnitState::Attack;
+                    u.z = -15.0;
+                }
+                g.buildings
+                    .retain(|b| b.team != Team::Enemy || b.kind == BuildingKind::Command);
+            }
+            g.ai_wave_timer = 0.0;
+            g.ai_decide();
+            assert_eq!(g.enemy_mode, Mode::Gather);
+            assert!(g
+                .units
+                .iter()
+                .filter(|u| u.team == Team::Enemy && u.hp > 0.0)
+                .all(|u| u.state == UnitState::Attack));
+        }
+    }
+
     #[test]
     fn modes_commit_only_the_correct_units() {
         let mut g = Game::new();

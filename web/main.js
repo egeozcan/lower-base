@@ -97,18 +97,19 @@ function refresh() {
   $('credits').textContent = Math.floor(snapshot.credits).toLocaleString();
   const seconds = Math.floor(snapshot.time);
   $('clock').textContent = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
-  for (const mode of ['gather', 'attack']) {
+  for (const mode of ['gather', 'attack', 'retreat']) {
     $(mode).disabled = !canCommand();
     $(mode).classList.toggle('active', snapshot.mode === mode);
     $(mode).setAttribute('aria-pressed', String(snapshot.mode === mode));
   }
   $('selected-count').textContent = String(selected.size).padStart(2, '0');
-  $('send-selected').disabled = !selected.size || !canCommand();
+  $('send-selected').disabled = !selected.size || !canCommand() || snapshot.mode === 'retreat';
   $('barracks-queue').textContent = queueText(snapshot.barracks_queue);
   $('factory-queue').textContent = queueText(snapshot.factory_queue);
   const refinery = snapshot.buildings.some(b => b.team === 'player' && b.kind === 'refinery');
   const collectors = snapshot.units.filter(u => u.team === 'player' && u.kind === 'collector').length;
-  $('economy-status').textContent = `${collectors} COLLECTOR${collectors === 1 ? '' : 'S'} · REFINERY ${refinery ? 'ONLINE' : 'LOST'}`;
+  const sheltered = snapshot.units.filter(u => u.team === 'player' && u.state === 'garrison').length;
+  $('economy-status').textContent = `${collectors} COLLECTOR${collectors === 1 ? '' : 'S'} · REFINERY ${refinery ? 'ONLINE' : 'LOST'}${sheltered ? ` · ${sheltered} INSIDE` : ''}`;
   const demolitionQueued = snapshot.factory_queue.includes('demolition');
   const demolitionAlive = snapshot.units.some(u => u.team === 'player' && u.kind === 'demolition');
   $('demolition-status').textContent = demolitionAlive ? 'ACTIVE · LIMIT 1' : demolitionQueued ? 'QUEUED · LIMIT 1' : 'FRIENDLY FIRE · LIMIT 1';
@@ -145,6 +146,7 @@ function frame(now) {
 }
 $('gather').addEventListener('click', () => setMode('gather'));
 $('attack').addEventListener('click', () => setMode('attack'));
+$('retreat').addEventListener('click', () => setMode('retreat'));
 $('send-selected').addEventListener('click', sendSelected);
 function setView(view) {
   if (!renderer || !game || paused) return;
@@ -180,6 +182,7 @@ window.addEventListener('keydown', event => {
   if (!canCommand()) return;
   if (event.key === '1') setMode('gather');
   if (event.key === '2') setMode('attack');
+  if (event.key.toLowerCase() === 'r') setMode('retreat');
   const spec = specs.find(s => s.key === event.key);
   if (spec) train(spec.kind);
   if (event.key === 'Enter' && !(event.target instanceof HTMLButtonElement)) sendSelected();
