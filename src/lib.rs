@@ -2,7 +2,7 @@
 
 pub mod simulation;
 
-use simulation::Game;
+use simulation::{Difficulty, Game};
 use wasm_bindgen::prelude::*;
 
 /// Browser-facing wrapper around the game simulation.
@@ -23,6 +23,17 @@ impl GameBridge {
     pub fn demo(seed: u32) -> GameBridge {
         Self {
             game: Game::demo_with_seed(seed),
+        }
+    }
+
+    pub fn with_difficulty(seed: u32, difficulty: &str, demo: bool) -> GameBridge {
+        let difficulty = Difficulty::parse(difficulty);
+        Self {
+            game: if demo {
+                Game::demo_with_difficulty(seed, difficulty)
+            } else {
+                Game::with_difficulty(seed, difficulty)
+            },
         }
     }
 

@@ -22,7 +22,13 @@ Open <http://localhost:8000>. Serve the files over HTTP rather than opening `ind
 
 ## How to play
 
-The main menu offers **Start Game**, **Demo**, and **Help**. Start Game puts you in command of the southern blue army. Demo lets you spectate two computer commanders using the same adaptive strategy and equal economies; troop commands are disabled. Help opens the field manual with objectives, unit guidance, and controls.
+The main menu offers **Easy**, **Medium** (default), and **Hard** AI difficulty, followed by **Start Game**, **Demo**, and **Help**. Start Game puts you in command of the southern blue army. Demo lets you spectate two computer commanders at the selected difficulty; troop commands are disabled. Help opens the field manual with objectives, unit guidance, and controls.
+
+- **Easy** reacts slowly, uses a predictable army mix, and sends small patrols with long gaps. A forgiving opponent for learning the game.
+- **Medium** uses the original adaptive production, regular attack waves, and defensive regrouping strategy.
+- **Hard** evaluates army health, damage matchups, and local pressure, invests in additional collectors when safe, and commits coordinated attack groups. It plans complementary production and saves for useful counters.
+
+All difficulties play fairly: both sides start with 500 credits, earn 24 passive credits per second, and have a 2,000-credit cap. Unit costs, build times, movement, combat, mining, and queue limits are identical. The whole battlefield is visible to both sides; AI decisions cannot inspect opposing production queues or sheltered units. Difficulty changes the commander's decisions, never its resources or unit stats. The selected difficulty applies to demos and rematches too.
 
 During either a game or demo, **Pause** (or `P`) freezes the battlefield, production, and income. Choose **Resume**, press `P`, or press `Esc` to continue. **Abort** returns to the main menu; your next match starts fresh. Finished demos announce the winning color and offer **Watch Again** or **Main Menu**.
 

@@ -11,13 +11,24 @@ const specs = [
   { kind: 'collector', name: 'ORE COLLECTOR', cost: 200, icon: '<svg viewBox="0 0 48 48"><path fill="#252b24" d="M3 29h42v13H3z"/><path fill="#a2aa7d" d="M4 16h27v18H4z"/><path fill="#6484bc" d="M31 22h9l5 7v5H31z"/><path fill="#e9bd4c" d="m8 15 5-8 7 4 5-6 4 10z"/><path fill="#cbd1ac" d="M34 24h5l3 5h-8z"/><circle fill="#161e1b" cx="12" cy="37" r="6"/><circle fill="#161e1b" cx="36" cy="37" r="6"/></svg>', key: '6' },
 ];
 let game, renderer, snapshot, lastTime = 0, ended = false, paused = false, demo = false;
+const difficultyDescriptions = {
+  easy: 'Slow reactions and small, predictable attack waves.',
+  medium: 'Adaptive counters and regular attack waves.',
+  hard: 'Plans army matchups, expands its economy, and coordinates assaults.',
+};
+for (const input of document.querySelectorAll('input[name="difficulty"]')) {
+  input.addEventListener('change', () => {
+    $('difficulty-description').textContent = difficultyDescriptions[input.value];
+  });
+}
 function canCommand() { return game && !demo && !paused && !ended && snapshot?.outcome === 'playing'; }
 function train(kind) { if (canCommand()) { game.train(kind); refresh(); } }
 function beginMatch(isDemo = false) {
   demo = isDemo;
   game?.free();
   const seed = crypto.getRandomValues(new Uint32Array(1))[0];
-  game = demo ? GameBridge.demo(seed) : new GameBridge(seed);
+  const difficulty = document.querySelector('input[name="difficulty"]:checked').value;
+  game = GameBridge.with_difficulty(seed, difficulty, demo);
   selected.clear();
   snapshot = null;
   ended = false;
@@ -29,7 +40,7 @@ function beginMatch(isDemo = false) {
   $('pause-screen').hidden = true;
   $('game-over').classList.add('hidden');
   $('spectator-note').hidden = !demo;
-  $('match-label').textContent = demo ? 'DEMO · AI VS AI' : 'YOUR COMMAND';
+  $('match-label').textContent = `${difficulty.toUpperCase()} · ${demo ? 'AI VS AI' : 'YOUR COMMAND'}`;
   $('restart').textContent = demo ? 'WATCH AGAIN' : 'PLAY AGAIN';
   document.querySelector('.topbar').inert = false;
   document.querySelector('.layout').inert = false;

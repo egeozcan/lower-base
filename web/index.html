@@ -18,6 +18,16 @@
       <p class="eyebrow">TACTICAL COMMAND</p>
       <h1 id="menu-title">LOWER<br><span>BASE</span></h1>
       <p class="menu-intro">Build your army. Hold the south.<br>Take the battlefield.</p>
+      <fieldset class="difficulty-picker" aria-describedby="difficulty-description difficulty-fairness">
+        <legend>AI DIFFICULTY</legend>
+        <div class="difficulty-options">
+          <label><input type="radio" name="difficulty" value="easy"><span>EASY</span></label>
+          <label><input type="radio" name="difficulty" value="medium" checked><span>MEDIUM</span></label>
+          <label><input type="radio" name="difficulty" value="hard"><span>HARD</span></label>
+        </div>
+        <p id="difficulty-description" aria-live="polite">Adaptive counters and regular attack waves.</p>
+        <p id="difficulty-fairness">Fair play in every mode. Equal resources and unit stats. No hidden information.</p>
+      </fieldset>
       <nav class="menu-actions" aria-label="Main menu">
         <button id="start-game" class="primary-action" type="button" disabled>START GAME <span aria-hidden="true">↗</span></button>
         <button id="start-demo" type="button" disabled>DEMO <small>COMPUTER VS COMPUTER</small></button>
