@@ -22,6 +22,10 @@ Open <http://localhost:8000>. Serve the files over HTTP rather than opening `ind
 
 ## How to play
 
+The main menu offers **Start Game**, **Demo**, and **Help**. Start Game puts you in command of the southern blue army. Demo lets you spectate two computer commanders using the same adaptive strategy and equal economies; troop commands are disabled. Help opens the field manual with objectives, unit guidance, and controls.
+
+During either a game or demo, **Pause** (or `P`) freezes the battlefield, production, and income. Choose **Resume**, press `P`, or press `Esc` to continue. **Abort** returns to the main menu; your next match starts fresh. Finished demos announce the winning color and offer **Watch Again** or **Main Menu**.
+
 - Queue rifle infantry and rocket troopers at the barracks, and tanks, demolition trucks, or ore collectors at the factory. Credits replenish over time; collectors bring in additional income.
 - **Demolition Truck** costs 250 credits and takes 6 seconds at the factory. Only one may be alive or queued per side; its slot opens after it explodes. It has 140 HP, moves slightly faster than a tank, and detonates at close range or when destroyed. The blast deals 450 damage within 2 units, falling linearly to zero at radius 7. It damages **all units and buildings, including allies**, and can trigger other trucks. Building damage uses the nearest edge of the footprint. Send it separately from your troops: rockets can stop it at range, tanks survive near the outer edge of the blast, and a full-health building survives even a direct blast. The AI occasionally fields one against large infantry armies and builds extra rockets against yours.
 - Both sides start with a refinery. Ore fields are randomly generated each match with equal amounts and positions rotated 180 degrees between the bases. Build an **Ore Collector** for 200 credits; it automatically mines ore and delivers up to 100 credits per trip to your refinery. Ore depletes as it is mined, and collectors move on to the next field.

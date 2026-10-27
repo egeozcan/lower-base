@@ -228,6 +228,7 @@ pub struct Explosion {
 #[derive(Serialize)]
 pub struct Game {
     pub time: f32,
+    pub demo: bool,
     pub credits: f32,
     pub mode: Mode,
     pub outcome: Outcome,
@@ -260,6 +261,8 @@ pub struct Game {
     #[serde(skip)]
     ai_wave_timer: f32,
     #[serde(skip)]
+    demo_wave_timer: f32,
+    #[serde(skip)]
     ai_credits: f32,
 }
 
@@ -275,6 +278,7 @@ impl Game {
     pub fn with_seed(seed: u32) -> Self {
         let mut g = Self {
             time: 0.0,
+            demo: false,
             credits: 500.0,
             mode: Mode::Gather,
             outcome: Outcome::Playing,
@@ -298,6 +302,7 @@ impl Game {
             enemy_factory_progress: 0.0,
             ai_decision_timer: 0.0,
             ai_wave_timer: 7.0,
+            demo_wave_timer: 7.0,
             ai_credits: 300.0,
         };
         for team in [Team::Player, Team::Enemy] {
@@ -318,6 +323,13 @@ impl Game {
         g.generate_ore(seed);
         g
     }
+    pub fn demo_with_seed(seed: u32) -> Self {
+        let mut game = Self::with_seed(seed);
+        game.demo = true;
+        game.credits = game.ai_credits;
+        game
+    }
+
     fn generate_ore(&mut self, mut seed: u32) {
         let mut random = || {
             seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
@@ -400,7 +412,7 @@ impl Game {
         });
     }
     pub fn set_mode(&mut self, mode: &str) {
-        if self.outcome != Outcome::Playing {
+        if self.demo || self.outcome != Outcome::Playing {
             return;
         }
         match mode {
@@ -417,7 +429,7 @@ impl Game {
         }
     }
     pub fn attack_selected(&mut self, ids: &[u32]) {
-        if self.outcome != Outcome::Playing {
+        if self.demo || self.outcome != Outcome::Playing {
             return;
         }
         for u in &mut self.units {
@@ -427,7 +439,7 @@ impl Game {
         }
     }
     pub fn train(&mut self, kind: &str) {
-        if self.outcome != Outcome::Playing {
+        if self.demo || self.outcome != Outcome::Playing {
             return;
         }
         let Some(kind) = UnitKind::parse(kind) else {
@@ -486,13 +498,24 @@ impl Game {
         self.time += dt;
         self.shots.retain(|shot| self.time - shot.time < 1.0);
         self.explosions.retain(|blast| self.time - blast.time < 1.0);
-        self.credits = (self.credits + 24.0 * dt).min(2000.0);
+        let (income, cap) = if self.demo {
+            (32.0, 800.0)
+        } else {
+            (24.0, 2000.0)
+        };
+        self.credits = (self.credits + income * dt).min(cap);
         self.ai_credits = (self.ai_credits + 32.0 * dt).min(800.0);
         self.harvest_and_unload(dt);
         self.ai_decision_timer -= dt;
         self.ai_wave_timer -= dt;
+        if self.demo {
+            self.demo_wave_timer -= dt;
+        }
         if self.ai_decision_timer <= 0.0 {
             self.ai_decide();
+            if self.demo {
+                self.ai_decide_for(Team::Player);
+            }
             self.ai_decision_timer = 1.0;
         }
         let pb = self.alive_building(Team::Player, BuildingKind::Barracks);
@@ -555,25 +578,70 @@ impl Game {
         };
     }
     fn ai_decide(&mut self) {
+        self.ai_decide_for(Team::Enemy);
+    }
+
+    fn production_queue(&self, team: Team, building: BuildingKind) -> &[UnitKind] {
+        match (team, building) {
+            (Team::Player, BuildingKind::Factory) => &self.factory_queue,
+            (Team::Player, _) => &self.barracks_queue,
+            (Team::Enemy, BuildingKind::Factory) => &self.enemy_factory_queue,
+            (Team::Enemy, _) => &self.enemy_barracks_queue,
+        }
+    }
+
+    fn queue_ai_unit(&mut self, team: Team, kind: UnitKind) {
+        let credits = if team == Team::Player {
+            &mut self.credits
+        } else {
+            &mut self.ai_credits
+        };
+        if *credits < kind.cost() {
+            return;
+        }
+        *credits -= kind.cost();
+        match (team, kind.production_building()) {
+            (Team::Player, BuildingKind::Factory) => self.factory_queue.push(kind),
+            (Team::Player, _) => self.barracks_queue.push(kind),
+            (Team::Enemy, BuildingKind::Factory) => self.enemy_factory_queue.push(kind),
+            (Team::Enemy, _) => self.enemy_barracks_queue.push(kind),
+        }
+    }
+
+    // Both demo commanders use the same production and wave strategy, viewed
+    // from their own end of the map. Normal matches still run only the enemy AI.
+    fn ai_decide_for(&mut self, team: Team) {
+        let opponent = if team == Team::Enemy {
+            Team::Player
+        } else {
+            Team::Enemy
+        };
+        let direction = if team == Team::Enemy { 1.0 } else { -1.0 };
+        let wave_timer = if team == Team::Enemy {
+            self.ai_wave_timer
+        } else {
+            self.demo_wave_timer
+        };
         let collectors = self
             .units
             .iter()
-            .filter(|u| u.team == Team::Enemy && u.kind == UnitKind::Collector)
+            .filter(|u| u.team == team && u.kind == UnitKind::Collector)
             .count()
             + self
-                .enemy_factory_queue
+                .production_queue(team, BuildingKind::Factory)
                 .iter()
                 .filter(|&&k| k == UnitKind::Collector)
                 .count();
         let wants_collector = self.time >= 3.0
             && collectors < 2
-            && self.alive_building(Team::Enemy, BuildingKind::Refinery)
-            && self.alive_building(Team::Enemy, BuildingKind::Factory)
-            && self.enemy_factory_queue.is_empty()
+            && self.alive_building(team, BuildingKind::Refinery)
+            && self.alive_building(team, BuildingKind::Factory)
+            && self
+                .production_queue(team, BuildingKind::Factory)
+                .is_empty()
             && self.ore.iter().any(|o| o.amount > 0.0);
-        if wants_collector && self.ai_credits >= UnitKind::Collector.cost() {
-            self.ai_credits -= UnitKind::Collector.cost();
-            self.enemy_factory_queue.push(UnitKind::Collector);
+        if wants_collector {
+            self.queue_ai_unit(team, UnitKind::Collector);
         }
         // Read both fielded forces and committed production: the opponent can prepare
         // a counter while a player order is still being built.
@@ -584,27 +652,31 @@ impl Game {
                 continue;
             }
             let index = unit_index(u.kind);
-            if u.team == Team::Player {
+            if u.team == opponent {
                 player[index] += 1.0;
             } else {
                 // A unit deep in enemy territory is less useful as a local reserve.
-                enemy[index] += if u.state == UnitState::Attack && u.z > 5.0 {
+                enemy[index] += if u.state == UnitState::Attack && u.z * direction > 5.0 {
                     0.5
                 } else {
                     1.0
                 };
             }
         }
-        for k in self.barracks_queue.iter().chain(&self.factory_queue) {
+        for k in self
+            .production_queue(opponent, BuildingKind::Barracks)
+            .iter()
+            .chain(self.production_queue(opponent, BuildingKind::Factory))
+        {
             if *k == UnitKind::Collector {
                 continue;
             }
             player[unit_index(*k)] += 1.0;
         }
         for k in self
-            .enemy_barracks_queue
+            .production_queue(team, BuildingKind::Barracks)
             .iter()
-            .chain(&self.enemy_factory_queue)
+            .chain(self.production_queue(team, BuildingKind::Factory))
         {
             if *k == UnitKind::Collector {
                 continue;
@@ -615,21 +687,24 @@ impl Game {
         let threatened = self
             .units
             .iter()
-            .any(|u| u.team == Team::Player && u.state == UnitState::Attack && u.z < -10.0);
+            .any(|u| u.team == opponent && u.state == UnitState::Attack && u.z * direction < -10.0);
         let reserves = self
             .units
             .iter()
-            .filter(|u| u.team == Team::Enemy && u.state == UnitState::Gather)
+            .filter(|u| u.team == team && u.state == UnitState::Gather)
             .count();
-        if threatened
-            || (self.ai_wave_timer <= 0.0 && (reserves >= 3 || self.ai_wave_timer <= -4.0))
-        {
+        if threatened || (wave_timer <= 0.0 && (reserves >= 3 || wave_timer <= -4.0)) {
             for u in &mut self.units {
-                if u.team == Team::Enemy && u.state == UnitState::Gather {
+                if u.team == team && u.state == UnitState::Gather {
                     u.state = UnitState::Attack;
                 }
             }
-            self.ai_wave_timer = if threatened { 7.0 } else { 9.0 };
+            let next_wave = if threatened { 7.0 } else { 9.0 };
+            if team == Team::Enemy {
+                self.ai_wave_timer = next_wave;
+            } else {
+                self.demo_wave_timer = next_wave;
+            }
         }
 
         // Soldiers counter rockets, rockets counter armor, and tanks counter infantry.
@@ -645,17 +720,24 @@ impl Game {
         } else {
             UnitKind::Soldier
         };
-        self.ai_status = if threatened {
-            "INTERCEPTING YOUR ADVANCE"
-        } else if player[2] > player[0] && player[2] >= player[1] {
-            "COUNTERING YOUR ARMOR"
-        } else if player[1] > player[2] {
-            "COUNTERING YOUR ROCKET TROOPS"
-        } else {
-            "BUILDING A COMBINED FORCE"
+        if team == Team::Enemy {
+            self.ai_status = if threatened {
+                "INTERCEPTING YOUR ADVANCE"
+            } else if player[2] > player[0] && player[2] >= player[1] {
+                "COUNTERING YOUR ARMOR"
+            } else if player[1] > player[2] {
+                "COUNTERING YOUR ROCKET TROOPS"
+            } else {
+                "BUILDING A COMBINED FORCE"
+            }
+            .into();
         }
-        .into();
-        if wants_collector && !threatened && self.enemy_factory_queue.is_empty() {
+        if wants_collector
+            && !threatened
+            && self
+                .production_queue(team, BuildingKind::Factory)
+                .is_empty()
+        {
             // Save for the economy while reserves still handle wave deployment.
             return;
         }
@@ -666,12 +748,13 @@ impl Game {
             && player[0] + player[1] >= 6.0
             && player[1] <= player[0]
             && reserves >= 3
-            && !self.has_demolition(Team::Enemy)
-            && self.alive_building(Team::Enemy, BuildingKind::Factory)
-            && self.enemy_factory_queue.is_empty();
-        if wants_demolition && self.ai_credits >= UnitKind::Demolition.cost() {
-            self.ai_credits -= UnitKind::Demolition.cost();
-            self.enemy_factory_queue.push(UnitKind::Demolition);
+            && !self.has_demolition(team)
+            && self.alive_building(team, BuildingKind::Factory)
+            && self
+                .production_queue(team, BuildingKind::Factory)
+                .is_empty();
+        if wants_demolition {
+            self.queue_ai_unit(team, UnitKind::Demolition);
         }
         // Avoid feeding armor into a rocket-heavy army. Save for a tank when
         // an infantry-heavy opponent makes armor the most urgent missing role.
@@ -681,29 +764,31 @@ impl Game {
             desired_tanks
         };
         let tank_need = tank_limit - enemy[2];
-        let wants_tank = self.alive_building(Team::Enemy, BuildingKind::Factory)
-            && self.enemy_factory_queue.is_empty()
+        let wants_tank = self.alive_building(team, BuildingKind::Factory)
+            && self
+                .production_queue(team, BuildingKind::Factory)
+                .is_empty()
             && tank_need > 0.0;
         let prioritize_tank =
             wants_tank && player[0] > player[2] && tank_need > soldier_need.max(rocket_need);
-        if prioritize_tank && self.ai_credits >= UnitKind::Tank.cost() {
-            self.ai_credits -= UnitKind::Tank.cost();
-            self.enemy_factory_queue.push(UnitKind::Tank);
+        if prioritize_tank {
+            self.queue_ai_unit(team, UnitKind::Tank);
         }
-        if (!prioritize_tank || !self.enemy_factory_queue.is_empty())
-            && self.alive_building(Team::Enemy, BuildingKind::Barracks)
-            && self.enemy_barracks_queue.len() < 2
-            && self.ai_credits >= choice.cost()
+        if (!prioritize_tank
+            || !self
+                .production_queue(team, BuildingKind::Factory)
+                .is_empty())
+            && self.alive_building(team, BuildingKind::Barracks)
+            && self.production_queue(team, BuildingKind::Barracks).len() < 2
         {
-            self.ai_credits -= choice.cost();
-            self.enemy_barracks_queue.push(choice);
+            self.queue_ai_unit(team, choice);
         }
         if wants_tank
-            && self.enemy_factory_queue.is_empty()
-            && self.ai_credits >= UnitKind::Tank.cost()
+            && self
+                .production_queue(team, BuildingKind::Factory)
+                .is_empty()
         {
-            self.ai_credits -= UnitKind::Tank.cost();
-            self.enemy_factory_queue.push(UnitKind::Tank);
+            self.queue_ai_unit(team, UnitKind::Tank);
         }
     }
     fn harvest_and_unload(&mut self, dt: f32) {
@@ -754,7 +839,8 @@ impl Game {
                 );
             } else if unit.returning {
                 if unit.team == Team::Player {
-                    self.credits = (self.credits + unit.cargo).min(2000.0);
+                    self.credits =
+                        (self.credits + unit.cargo).min(if self.demo { 800.0 } else { 2000.0 });
                 } else {
                     self.ai_credits = (self.ai_credits + unit.cargo).min(800.0);
                 }
@@ -1114,6 +1200,78 @@ mod tests {
             u.cooldown = 0.0;
         }
         g
+    }
+
+    #[test]
+    fn demo_commanders_produce_mine_deploy_and_fight_without_input() {
+        let mut g = Game::demo_with_seed(1941);
+        assert_eq!(g.credits, g.ai_credits);
+        let first_new_id = g.next_id;
+        for _ in 0..400 {
+            g.update(0.05);
+        }
+        for team in [Team::Player, Team::Enemy] {
+            assert!(g
+                .units
+                .iter()
+                .any(|u| u.team == team && u.id >= first_new_id));
+            assert!(g
+                .units
+                .iter()
+                .any(|u| u.team == team && u.kind == UnitKind::Collector));
+            assert!(g
+                .units
+                .iter()
+                .any(|u| u.team == team && u.state == UnitState::Attack));
+        }
+        for _ in 0..1400 {
+            g.update(0.05);
+        }
+        assert!(g.player_kills > 0, "blue AI must engage the red army");
+        assert!(g.enemy_kills > 0, "red AI must engage the blue army");
+        assert!(g.ore.iter().any(|o| o.amount < o.max_amount));
+        assert!((0.0..=800.0).contains(&g.credits));
+        assert!((0.0..=800.0).contains(&g.ai_credits));
+    }
+
+    #[test]
+    fn demo_ignores_player_commands_and_normal_matches_remain_controllable() {
+        let mut g = Game::demo_with_seed(5);
+        let initial = serde_json::to_string(&g).unwrap();
+        let ids: Vec<_> = g.units.iter().map(|u| u.id).collect();
+        g.train("tank");
+        g.set_mode("attack");
+        g.attack_selected(&ids);
+        assert_eq!(serde_json::to_string(&g).unwrap(), initial);
+
+        let mut normal = Game::with_seed(5);
+        normal.train("tank");
+        normal.set_mode("attack");
+        assert!(!normal.demo);
+        assert_eq!(normal.factory_queue, vec![UnitKind::Tank]);
+        assert_eq!(normal.mode, Mode::Attack);
+        assert_eq!(normal.time, 0.0);
+    }
+
+    #[test]
+    fn demo_stops_when_either_side_is_eliminated() {
+        for loser in [Team::Player, Team::Enemy] {
+            let mut g = Game::demo_with_seed(26);
+            g.units.retain(|u| u.team != loser);
+            g.buildings.retain(|b| b.team != loser);
+            g.update(0.05);
+            assert_eq!(
+                g.outcome,
+                if loser == Team::Player {
+                    Outcome::Defeat
+                } else {
+                    Outcome::Victory
+                }
+            );
+            let finished = serde_json::to_string(&g).unwrap();
+            g.update(0.25);
+            assert_eq!(serde_json::to_string(&g).unwrap(), finished);
+        }
     }
 
     #[test]

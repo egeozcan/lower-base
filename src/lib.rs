@@ -20,6 +20,12 @@ impl GameBridge {
         }
     }
 
+    pub fn demo(seed: u32) -> GameBridge {
+        Self {
+            game: Game::demo_with_seed(seed),
+        }
+    }
+
     pub fn update(&mut self, dt: f32) {
         self.game.update(dt);
     }

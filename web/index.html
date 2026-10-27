@@ -12,15 +12,32 @@
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
-  <div id="app">
+  <main id="main-menu" class="front-screen" aria-labelledby="menu-title">
+    <div class="menu-card">
+      <span class="brand-mark menu-mark" aria-hidden="true">✦</span>
+      <p class="eyebrow">TACTICAL COMMAND</p>
+      <h1 id="menu-title">LOWER<br><span>BASE</span></h1>
+      <p class="menu-intro">Build your army. Hold the south.<br>Take the battlefield.</p>
+      <nav class="menu-actions" aria-label="Main menu">
+        <button id="start-game" class="primary-action" type="button" disabled>START GAME <span aria-hidden="true">↗</span></button>
+        <button id="start-demo" type="button" disabled>DEMO <small>COMPUTER VS COMPUTER</small></button>
+        <a href="./help.html">HELP <span aria-hidden="true">?</span></a>
+      </nav>
+      <p id="menu-status" class="menu-status" role="status">Loading game…</p>
+    </div>
+  </main>
+  <div id="app" hidden>
     <header class="topbar">
       <div class="brand" aria-label="Lower Base"><span class="brand-mark">✦</span></div>
       <div class="top-center"><span id="clock">00:00</span></div>
+      <span id="match-label" class="match-label">YOUR COMMAND</span>
+      <div class="match-actions"><button id="pause" type="button" title="Pause game (P)">PAUSE</button><button id="abort" type="button" title="Abort match and return to the menu">ABORT</button></div>
       <div class="top-right"><span class="credits-icon">◆</span><strong id="credits" aria-label="Credits">0</strong></div>
     </header>
 
     <main class="layout">
       <aside class="panel left-panel">
+        <p id="spectator-note" class="spectator-note" hidden>DEMO · BLUE VS RED<br><span>Two computer commanders control production and attacks. Watch the battle unfold.</span></p>
         <div class="mode-switch" role="group" aria-label="Deployment mode">
           <button id="gather" class="mode active" type="button" title="New units gather at your base"><span class="mode-icon">▥</span><span><strong>GATHER</strong></span><span class="mode-key">1</span></button>
           <button id="attack" class="mode" type="button" title="Send all gathered units and new units north; attacks cannot be recalled"><span class="mode-icon">➤</span><span><strong>ATTACK</strong></span><span class="mode-key">2</span></button>
@@ -33,8 +50,7 @@
         <div id="scene" title="Select gathered units"></div>
         <div class="scene-vignette"></div>
         <div class="view-switch" role="group" aria-label="Battlefield view"><button id="map-view" type="button" class="active" aria-pressed="true">MAP</button><button id="base-view" type="button" aria-pressed="false">BASE</button></div>
-        <div id="loading" class="overlay"><div class="overlay-card"><div class="loader"></div><h2>LOADING</h2></div></div>
-        <div id="game-over" class="overlay hidden"><div class="overlay-card"><h2 id="result-title">VICTORY</h2><button id="restart" type="button">PLAY AGAIN</button></div></div>
+        <div id="game-over" class="overlay hidden"><div class="overlay-card"><h2 id="result-title">VICTORY</h2><button id="restart" type="button">PLAY AGAIN</button><button id="end-menu" type="button">MAIN MENU</button></div></div>
       </section>
 
       <aside class="panel right-panel">
@@ -42,6 +58,17 @@
         <div class="force hostile"><div class="force-heading"><span><i class="key-enemy"></i> HOSTILE</span></div><div class="force-stats"><div><strong id="enemy-units">0</strong><small>UNITS</small></div><div><strong id="enemy-buildings">0</strong><small>STRUCTURES</small></div></div><div class="force-bar"><span id="enemy-bar"></span></div></div>
       </aside>
     </main>
+    <div id="pause-screen" class="pause-screen" role="dialog" aria-modal="true" aria-labelledby="pause-title" hidden>
+      <div class="menu-card pause-card">
+        <p class="eyebrow">COMMAND ON HOLD</p>
+        <h2 id="pause-title">PAUSED</h2>
+        <p class="menu-intro">The battlefield is frozen.<br>Resume when you’re ready.</p>
+        <div class="menu-actions">
+          <button id="resume" class="primary-action" type="button">RESUME <span aria-hidden="true">↗</span></button>
+          <button id="pause-abort" type="button">ABORT TO MENU</button>
+        </div>
+      </div>
+    </div>
   </div>
   <script type="module" src="./main.js"></script>
 </body>

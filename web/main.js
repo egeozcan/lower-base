@@ -10,18 +10,74 @@ const specs = [
   { kind: 'demolition', name: 'DEMOLITION TRUCK', cost: 250, icon: '<svg viewBox="0 0 48 48"><path fill="#252b24" d="M3 29h42v12H3z"/><path fill="#6484bc" d="M3 20h12l5 10H3z"/><path fill="#b74f32" d="M21 12h22v21H21z"/><path fill="#e9c76a" d="m24 14 5 5-5 5 5 5h6l-5-5 5-5-5-5zm12 0 5 5-5 5 5 5h2V14z"/><path fill="#cbd1ac" d="M6 22h7l3 6H6z"/><circle fill="#161e1b" cx="11" cy="37" r="6"/><circle fill="#161e1b" cx="36" cy="37" r="6"/></svg>', key: '7' },
   { kind: 'collector', name: 'ORE COLLECTOR', cost: 200, icon: '<svg viewBox="0 0 48 48"><path fill="#252b24" d="M3 29h42v13H3z"/><path fill="#a2aa7d" d="M4 16h27v18H4z"/><path fill="#6484bc" d="M31 22h9l5 7v5H31z"/><path fill="#e9bd4c" d="m8 15 5-8 7 4 5-6 4 10z"/><path fill="#cbd1ac" d="M34 24h5l3 5h-8z"/><circle fill="#161e1b" cx="12" cy="37" r="6"/><circle fill="#161e1b" cx="36" cy="37" r="6"/></svg>', key: '6' },
 ];
-let game, renderer, snapshot, lastTime = 0, ended = false;
-function newGame() { return new GameBridge(crypto.getRandomValues(new Uint32Array(1))[0]); }
+let game, renderer, snapshot, lastTime = 0, ended = false, paused = false, demo = false;
+function canCommand() { return game && !demo && !paused && !ended && snapshot?.outcome === 'playing'; }
+function train(kind) { if (canCommand()) { game.train(kind); refresh(); } }
+function beginMatch(isDemo = false) {
+  demo = isDemo;
+  game?.free();
+  const seed = crypto.getRandomValues(new Uint32Array(1))[0];
+  game = demo ? GameBridge.demo(seed) : new GameBridge(seed);
+  selected.clear();
+  snapshot = null;
+  ended = false;
+  paused = false;
+  lastTime = 0;
+  $('main-menu').hidden = true;
+  $('app').hidden = false;
+  $('app').classList.toggle('demo-mode', demo);
+  $('pause-screen').hidden = true;
+  $('game-over').classList.add('hidden');
+  $('spectator-note').hidden = !demo;
+  $('match-label').textContent = demo ? 'DEMO · AI VS AI' : 'YOUR COMMAND';
+  $('restart').textContent = demo ? 'WATCH AGAIN' : 'PLAY AGAIN';
+  document.querySelector('.topbar').inert = false;
+  document.querySelector('.layout').inert = false;
+  try {
+    if (!renderer) renderer = new BattlefieldRenderer($('scene'), onSelect);
+    renderer.reset();
+    setView('map');
+    $('pause').focus();
+  } catch (error) {
+    console.error(error);
+    abortMatch();
+    $('menu-status').textContent = 'Unable to render the battlefield. Check that WebGL is available, then try again.';
+  }
+}
+function abortMatch() {
+  game?.free();
+  game = null;
+  snapshot = null;
+  selected.clear();
+  paused = false;
+  ended = false;
+  lastTime = 0;
+  $('pause-screen').hidden = true;
+  $('app').hidden = true;
+  $('main-menu').hidden = false;
+  $('start-game').focus();
+}
+function setPaused(value) {
+  if (!game || ended) return;
+  paused = value;
+  lastTime = 0;
+  $('pause-screen').hidden = !paused;
+  document.querySelector('.topbar').inert = paused;
+  document.querySelector('.layout').inert = paused;
+  if (!paused) renderer.lastFrame = performance.now();
+  refresh();
+  $(paused ? 'resume' : 'pause').focus();
+}
 
 function createProduction() {
   $('production').innerHTML = specs.map(s => `<button type="button" class="unit-card" id="train-${s.kind}" title="Queue ${s.name} (${s.key})${s.kind === 'collector' ? ' — automatically mines ore and delivers credits to your refinery' : s.kind === 'demolition' ? ' — 6s build, 140 HP. Explodes on attack or death: up to 450 damage, radius 7, damages allies. One fielded or queued.' : ''}"><span class="unit-art" aria-hidden="true">${s.icon}</span><span class="unit-info"><strong>${s.name}</strong>${s.kind === 'demolition' ? '<small id="demolition-status">FRIENDLY FIRE · LIMIT 1</small>' : ''}</span><span class="unit-cost">◆ ${s.cost}</span></button>`).join('') + '<div class="queue-label">BARRACKS <strong id="barracks-queue">—</strong> &nbsp; / &nbsp; FACTORY <strong id="factory-queue">—</strong></div><div class="economy-note"><span id="economy-status"></span><span>Collectors mine ore. Demo trucks explode on attack or death, damaging allies too. One per player.</span></div>';
-  for (const s of specs) $(`train-${s.kind}`).addEventListener('click', () => { game.train(s.kind); refresh(); });
+  for (const s of specs) $(`train-${s.kind}`).addEventListener('click', () => train(s.kind));
 }
 function queueText(queue) { return queue.length ? queue.map(k => ({soldier:'RIFLE', rocket:'ROCKET', tank:'TANK', collector:'COLLECTOR', demolition:'DEMO'}[k])).join(' › ') : 'IDLE'; }
-function setMode(mode) { game.set_mode(mode); selected.clear(); refresh(); }
-function sendSelected() { if (!selected.size) return; game.attack_selected(new Uint32Array([...selected])); selected.clear(); refresh(); }
+function setMode(mode) { if (!canCommand()) return; game.set_mode(mode); selected.clear(); refresh(); }
+function sendSelected() { if (!canCommand() || !selected.size) return; game.attack_selected(new Uint32Array([...selected])); selected.clear(); refresh(); }
 function onSelect(id, additive, touch) {
-  if (ended) return;
+  if (!canCommand()) return;
   // A tap on open ground clears the selection; a tap on a unit toggles it.
   if (id === null) {
     if (!additive || touch) selected.clear();
@@ -42,11 +98,12 @@ function refresh() {
   const seconds = Math.floor(snapshot.time);
   $('clock').textContent = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
   for (const mode of ['gather', 'attack']) {
+    $(mode).disabled = !canCommand();
     $(mode).classList.toggle('active', snapshot.mode === mode);
     $(mode).setAttribute('aria-pressed', String(snapshot.mode === mode));
   }
   $('selected-count').textContent = String(selected.size).padStart(2, '0');
-  $('send-selected').disabled = !selected.size || snapshot.outcome !== 'playing';
+  $('send-selected').disabled = !selected.size || !canCommand();
   $('barracks-queue').textContent = queueText(snapshot.barracks_queue);
   $('factory-queue').textContent = queueText(snapshot.factory_queue);
   const refinery = snapshot.buildings.some(b => b.team === 'player' && b.kind === 'refinery');
@@ -58,7 +115,7 @@ function refresh() {
   for (const s of specs) {
     const building = ['tank', 'collector', 'demolition'].includes(s.kind) ? 'factory' : 'barracks';
     const queue = building === 'factory' ? snapshot.factory_queue : snapshot.barracks_queue;
-    $(`train-${s.kind}`).disabled = snapshot.outcome !== 'playing' || snapshot.credits < s.cost || queue.length >= 8 || (s.kind === 'demolition' && (demolitionAlive || demolitionQueued)) || (s.kind === 'collector' && !refinery) || !snapshot.buildings.some(b => b.team === 'player' && b.kind === building);
+    $(`train-${s.kind}`).disabled = !canCommand() || snapshot.credits < s.cost || queue.length >= 8 || (s.kind === 'demolition' && (demolitionAlive || demolitionQueued)) || (s.kind === 'collector' && !refinery) || !snapshot.buildings.some(b => b.team === 'player' && b.kind === building);
   }
   for (const [team, prefix] of [['player', 'friendly'], ['enemy', 'enemy']]) {
     const units = snapshot.units.filter(u => u.team === team);
@@ -67,25 +124,30 @@ function refresh() {
     $(`${prefix}-buildings`).textContent = buildings.length;
     $(`${prefix}-bar`).style.width = `${Math.max(0, Math.min(100, buildings.reduce((a,b) => a + b.hp / b.max_hp, 0) / 4 * 100))}%`;
   }
-  renderer.update(snapshot, selected);
+  if (!paused) renderer.update(snapshot, selected);
+  $('pause').disabled = snapshot.outcome !== 'playing';
   if (snapshot.outcome !== 'playing' && !ended) {
     ended = true;
     const victory = snapshot.outcome === 'victory';
-    $('result-title').textContent = victory ? 'VICTORY' : 'DEFEAT';
+    $('result-title').textContent = demo ? (victory ? 'BLUE WINS' : 'RED WINS') : (victory ? 'VICTORY' : 'DEFEAT');
     $('game-over').classList.remove('hidden');
+    $('restart').focus();
   }
 }
 function frame(now) {
   if (!lastTime) lastTime = now;
   const dt = Math.min((now - lastTime) / 1000, .1); lastTime = now;
-  if (!ended) { game.update(dt); refresh(); }
-  else if (renderer && snapshot) renderer.update(snapshot, selected);
+  if (game && !paused) {
+    if (!ended) { game.update(dt); refresh(); }
+    else renderer.update(snapshot, selected);
+  }
   requestAnimationFrame(frame);
 }
 $('gather').addEventListener('click', () => setMode('gather'));
 $('attack').addEventListener('click', () => setMode('attack'));
 $('send-selected').addEventListener('click', sendSelected);
 function setView(view) {
+  if (!renderer || !game || paused) return;
   renderer.setView(view);
   for (const option of ['map', 'base']) {
     $(`${option}-view`).classList.toggle('active', option === view);
@@ -95,28 +157,45 @@ function setView(view) {
 }
 $('map-view').addEventListener('click', () => setView('map'));
 $('base-view').addEventListener('click', () => setView('base'));
-$('restart').addEventListener('click', () => { game.free(); game = newGame(); selected.clear(); ended = false; lastTime = 0; $('game-over').classList.add('hidden'); refresh(); });
+$('start-game').addEventListener('click', () => beginMatch());
+$('start-demo').addEventListener('click', () => beginMatch(true));
+$('restart').addEventListener('click', () => beginMatch(demo));
+$('pause').addEventListener('click', () => setPaused(true));
+$('resume').addEventListener('click', () => setPaused(false));
+for (const id of ['abort', 'pause-abort', 'end-menu']) $(id).addEventListener('click', abortMatch);
 window.addEventListener('keydown', event => {
-  if (event.repeat || event.target instanceof HTMLButtonElement) return;
+  if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || !game) return;
+  if (event.key.toLowerCase() === 'p' || (paused && event.key === 'Escape')) {
+    event.preventDefault();
+    setPaused(!paused);
+    return;
+  }
+  if (paused) {
+    if (event.key === 'Tab') {
+      event.preventDefault();
+      $(document.activeElement === $('resume') ? 'pause-abort' : 'resume').focus();
+    }
+    return;
+  }
+  if (!canCommand()) return;
   if (event.key === '1') setMode('gather');
   if (event.key === '2') setMode('attack');
   const spec = specs.find(s => s.key === event.key);
-  if (spec) { game.train(spec.kind); refresh(); }
-  if (event.key === 'Enter') sendSelected();
+  if (spec) train(spec.kind);
+  if (event.key === 'Enter' && !(event.target instanceof HTMLButtonElement)) sendSelected();
   if (event.key === 'Escape') { selected.clear(); refresh(); }
 });
 async function start() {
   try {
     await init();
-    game = newGame();
-    renderer = new BattlefieldRenderer($('scene'), onSelect);
     createProduction();
-    refresh();
-    $('loading').classList.add('hidden');
+    $('start-game').disabled = false;
+    $('start-demo').disabled = false;
+    $('menu-status').textContent = 'READY FOR COMMAND';
     requestAnimationFrame(frame);
   } catch (error) {
     console.error(error);
-    $('loading').innerHTML = `<div class="overlay-card"><span class="eyebrow">CONNECTION ERROR</span><h2>UNABLE TO START</h2><p>Build the WebAssembly files and serve this page over HTTP. See the project README for instructions.</p></div>`;
+    $('menu-status').textContent = 'Unable to load the game. Build the WebAssembly files and serve this page over HTTP; see the README.';
   }
 }
 start();

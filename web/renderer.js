@@ -442,6 +442,15 @@ export class BattlefieldRenderer {
     this.camera.left = -height * aspect / 2; this.camera.right = height * aspect / 2;
     this.camera.top = height / 2; this.camera.bottom = -height / 2; this.camera.updateProjectionMatrix();
   }
+  reset() {
+    this.lastTime = 0;
+    this.lastFrame = performance.now();
+    this.lastShotId = 0;
+    this.lastExplosionId = 0;
+    this.combatEffects.clear();
+    for (const entity of this.entities.values()) this.removeEntity(entity);
+    this.entities.clear();
+  }
   update(snapshot, selectedIds = []) {
     if (!snapshot) return;
     const restarting = snapshot.time < this.lastTime;
@@ -449,11 +458,7 @@ export class BattlefieldRenderer {
     const dt = Math.min(.1, Math.max(0, (now - this.lastFrame) / 1000));
     this.lastFrame = now;
     if (restarting) {
-      this.lastShotId = 0;
-      this.lastExplosionId = 0;
-      this.combatEffects.clear();
-      for (const entity of this.entities.values()) this.removeEntity(entity);
-      this.entities.clear();
+      this.reset();
     }
     this.lastTime = snapshot.time;
     const oreIds = new Set(snapshot.ore.filter(o => o.amount > 0).map(o => o.id));
