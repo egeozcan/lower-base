@@ -186,10 +186,14 @@ pub enum Outcome {
 }
 
 #[derive(Clone, Serialize)]
-pub struct TankShot {
+pub struct CombatShot {
     pub id: u32,
     pub time: f32,
-    pub unit_id: u32,
+    pub source_id: u32,
+    pub source_is_unit: bool,
+    pub kind: UnitKind,
+    pub source_y: f32,
+    pub target_y: f32,
     pub x: f32,
     pub z: f32,
     pub target_x: f32,
@@ -212,7 +216,7 @@ pub struct Game {
     pub ai_status: String,
     pub player_kills: u32,
     pub enemy_kills: u32,
-    pub tank_shots: Vec<TankShot>,
+    pub shots: Vec<CombatShot>,
     #[serde(skip)]
     next_shot_id: u32,
     #[serde(skip)]
@@ -258,7 +262,7 @@ impl Game {
             ai_status: "ASSESSING YOUR FORCES".into(),
             player_kills: 0,
             enemy_kills: 0,
-            tank_shots: Vec::new(),
+            shots: Vec::new(),
             next_shot_id: 1,
             next_id: 1,
             enemy_barracks_queue: vec![],
@@ -435,7 +439,7 @@ impl Game {
     }
     fn step(&mut self, dt: f32) {
         self.time += dt;
-        self.tank_shots.retain(|shot| self.time - shot.time < 1.0);
+        self.shots.retain(|shot| self.time - shot.time < 1.0);
         self.credits = (self.credits + 24.0 * dt).min(2000.0);
         self.ai_credits = (self.ai_credits + 32.0 * dt).min(800.0);
         self.harvest_and_unload(dt);
@@ -830,24 +834,30 @@ impl Game {
                     let (j, _) = target_building.unwrap();
                     building_damage[j] += unit.kind.damage(None);
                 }
-                if unit.kind == UnitKind::Tank {
-                    let (target_x, target_z) = if let Some(j) = firing_target {
-                        (snapshot[j].x, snapshot[j].z)
-                    } else {
-                        let (j, _) = target_building.unwrap();
-                        (buildings[j].x, buildings[j].z)
-                    };
-                    self.tank_shots.push(TankShot {
-                        id: self.next_shot_id,
-                        time: self.time,
-                        unit_id: unit.id,
-                        x: unit.x,
-                        z: unit.z,
-                        target_x,
-                        target_z,
-                    });
-                    self.next_shot_id += 1;
-                }
+                let (target_x, target_y, target_z) = if let Some(j) = firing_target {
+                    (snapshot[j].x, 1.1, snapshot[j].z)
+                } else {
+                    let (j, _) = target_building.unwrap();
+                    (buildings[j].x, 2.0, buildings[j].z)
+                };
+                self.shots.push(CombatShot {
+                    id: self.next_shot_id,
+                    time: self.time,
+                    source_id: unit.id,
+                    source_is_unit: true,
+                    kind: unit.kind,
+                    source_y: match unit.kind {
+                        UnitKind::Tank => 1.7,
+                        UnitKind::Rocket => 1.53,
+                        _ => 1.1,
+                    },
+                    target_y,
+                    x: unit.x,
+                    z: unit.z,
+                    target_x,
+                    target_z,
+                });
+                self.next_shot_id += 1;
                 unit.cooldown = unit.kind.interval();
             } else if !unit_in_range && !building_in_range {
                 let destination = if unit.state == UnitState::Gather {
@@ -883,6 +893,20 @@ impl Game {
                     .min_by(|a, b| a.1.total_cmp(&b.1))
                 {
                     unit_damage[j] += 18.0;
+                    self.shots.push(CombatShot {
+                        id: self.next_shot_id,
+                        time: self.time,
+                        source_id: b.id,
+                        source_is_unit: false,
+                        kind: UnitKind::Soldier,
+                        source_y: 4.4,
+                        target_y: 1.1,
+                        x: b.x,
+                        z: b.z,
+                        target_x: snapshot[j].x,
+                        target_z: snapshot[j].z,
+                    });
+                    self.next_shot_id += 1;
                     b.cooldown = 1.0;
                 }
             }
@@ -947,30 +971,81 @@ fn distance_sq(x: f32, z: f32, other_x: f32, other_z: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn tank_shot_records_actual_target_even_on_lethal_hit() {
-        let mut g = super::Game::new();
+    fn every_weapon_records_actual_target_even_on_lethal_hit() {
+        for kind in [UnitKind::Soldier, UnitKind::Rocket, UnitKind::Tank] {
+            let mut g = Game::new();
+            g.units.clear();
+            g.buildings.clear();
+            g.spawn(Team::Player, kind);
+            g.spawn(Team::Enemy, UnitKind::Soldier);
+            g.units[0].x = 0.0;
+            g.units[0].z = 0.0;
+            g.units[0].cooldown = 0.0;
+            g.units[1].x = 3.0;
+            g.units[1].z = 0.0;
+            g.units[1].hp = 1.0;
+            g.units[1].cooldown = 10.0;
+            let source_id = g.units[0].id;
+            g.combat_and_move(0.05);
+            assert!(g.units[1].hp <= 0.0);
+            assert_eq!(g.shots.len(), 1);
+            let shot = &g.shots[0];
+            assert_eq!(shot.source_id, source_id);
+            assert!(shot.source_is_unit);
+            assert_eq!(shot.kind, kind);
+            assert_eq!(
+                (shot.x, shot.z, shot.target_x, shot.target_z),
+                (0.0, 0.0, 3.0, 0.0)
+            );
+            g.combat_and_move(0.05);
+            assert_eq!(g.shots.len(), 1, "cooldown prevents duplicate shots");
+        }
+    }
+    #[test]
+    fn shots_include_building_targets_and_command_defense() {
+        let mut g = Game::new();
         g.units.clear();
         g.buildings.clear();
-        g.spawn(super::Team::Player, super::UnitKind::Tank);
-        g.spawn(super::Team::Enemy, super::UnitKind::Soldier);
+        g.spawn(Team::Player, UnitKind::Rocket);
         g.units[0].x = 0.0;
         g.units[0].z = 0.0;
         g.units[0].cooldown = 0.0;
-        g.units[1].x = 3.0;
-        g.units[1].z = 0.0;
-        g.units[1].hp = 1.0;
-        let tank_id = g.units[0].id;
+        g.add_building(Team::Enemy, BuildingKind::Command, 5.0, 0.0, 1400.0);
+        g.buildings[0].cooldown = 0.0;
         g.combat_and_move(0.05);
-        assert!(g.units[1].hp <= 0.0);
-        assert_eq!(g.tank_shots.len(), 1);
-        let shot = &g.tank_shots[0];
-        assert_eq!(shot.unit_id, tank_id);
+        assert_eq!(g.shots.len(), 2);
+        let attack = &g.shots[0];
         assert_eq!(
-            (shot.x, shot.z, shot.target_x, shot.target_z),
-            (0.0, 0.0, 3.0, 0.0)
+            (attack.target_x, attack.target_y, attack.target_z),
+            (5.0, 2.0, 0.0)
         );
+        let defense = &g.shots[1];
+        assert!(!defense.source_is_unit);
+        assert_eq!(defense.source_id, g.buildings[0].id);
+        assert_eq!((defense.x, defense.source_y, defense.z), (5.0, 4.4, 0.0));
+        assert_eq!((defense.target_x, defense.target_z), (0.0, 0.0));
+        assert!(defense.id > attack.id);
+    }
+    #[test]
+    fn collectors_never_emit_shots_and_old_events_expire() {
+        let mut g = Game::new();
+        g.units.clear();
+        g.spawn(Team::Player, UnitKind::Collector);
+        g.spawn(Team::Enemy, UnitKind::Collector);
+        for unit in &mut g.units {
+            unit.x = 0.0;
+            unit.z = 0.0;
+            unit.cooldown = 0.0;
+        }
         g.combat_and_move(0.05);
-        assert_eq!(g.tank_shots.len(), 1, "cooldown prevents duplicate shots");
+        assert!(g.shots.is_empty());
+        g.units[0].kind = UnitKind::Soldier;
+        g.combat_and_move(0.05);
+        assert_eq!(g.shots.len(), 1);
+        g.shots[0].time = -2.0;
+        g.units[0].kind = UnitKind::Collector;
+        g.update(0.05);
+        assert!(g.shots.is_empty());
     }
     use super::*;
     #[test]

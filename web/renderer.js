@@ -1,4 +1,5 @@
 import * as THREE from './three.module.js';
+import { CombatEffects } from './combat-effects.js';
 
 // The battlefield is deliberately made from simple, lit geometry so it remains
 // readable when dozens of units are moving at once.
@@ -202,7 +203,7 @@ function buildingMesh(b) {
     const mesh = new THREE.Mesh(geometry, material);
     mesh.castShadow = true; mesh.receiveShadow = true; body.add(mesh);
   }
-  const baseRing = ring(b.kind === 'command' ? 4.3 : 3.5, accent, .3); g.add(baseRing);
+  const baseRing = ring(b.kind === 'command' ? 4.3 : 3.5, accent, .3); baseRing.userData.decoration = true; g.add(baseRing);
   return g;
 }
 function unitMesh(u) {
@@ -366,7 +367,7 @@ export class BattlefieldRenderer {
     const sun = new THREE.DirectionalLight(0xffe6b2, 3); sun.position.set(-30, 65, 25); sun.castShadow = true;
     sun.shadow.mapSize.set(compact ? 1024 : 2048, compact ? 1024 : 2048); Object.assign(sun.shadow.camera, {left:-60,right:60,top:70,bottom:-70,near:1,far:160}); sun.shadow.bias = -0.0005; this.scene.add(sun);
     addEnvironment(this.scene);
-    this.entities = new Map(); this.oreFields = new Map(); this.effects = []; this.lastShotId = 0; this.lastTime = 0; this.shakeUntil = 0; this.raycaster = new THREE.Raycaster(); this.pointer = new THREE.Vector2();
+    this.entities = new Map(); this.oreFields = new Map(); this.combatEffects = new CombatEffects(this.scene, compact); this.lastShotId = 0; this.lastTime = 0; this.lastFrame = performance.now(); this.raycaster = new THREE.Raycaster(); this.pointer = new THREE.Vector2();
     const pointerStarts = new Map();
     this.renderer.domElement.addEventListener('pointerdown', event => {
       pointerStarts.set(event.pointerId, [event.clientX, event.clientY]);
@@ -425,7 +426,15 @@ export class BattlefieldRenderer {
   update(snapshot, selectedIds = []) {
     if (!snapshot) return;
     const restarting = snapshot.time < this.lastTime;
-    if (restarting) this.lastShotId = 0;
+    const now = performance.now();
+    const dt = Math.min(.1, Math.max(0, (now - this.lastFrame) / 1000));
+    this.lastFrame = now;
+    if (restarting) {
+      this.lastShotId = 0;
+      this.combatEffects.clear();
+      for (const entity of this.entities.values()) this.removeEntity(entity);
+      this.entities.clear();
+    }
     this.lastTime = snapshot.time;
     const oreIds = new Set(snapshot.ore.filter(o => o.amount > 0).map(o => o.id));
     for (const deposit of snapshot.ore) {
@@ -459,10 +468,8 @@ export class BattlefieldRenderer {
         }
         const selection = ring(isUnit && item.kind === 'tank' ? 1.8 : 1.25, 0x9eff40, .95); selection.visible = false; group.add(selection);
         const hp = healthBar(isUnit ? 1.8 : 4.5); hp.position.y = isUnit ? (item.kind === 'tank' ? 2.3 : 2.5) : (item.kind === 'command' ? 6.8 : 5.1); group.add(hp);
-        this.scene.add(group); entity = {group, selection, hp, hitTarget, cargo, kind: item.kind, isUnit, selectable: false, lastHp: item.hp, recoilUntil: 0}; this.entities.set(key, entity);
+        this.scene.add(group); entity = {group, selection, hp, hitTarget, cargo, kind: item.kind, isUnit, selectable: false, recoilUntil: 0, emission: 0}; this.entities.set(key, entity);
       }
-      if (item.hp < entity.lastHp) this.showImpact(item, snapshot.units);
-      entity.lastHp = item.hp;
       if (entity.cargo) {
         const dx = item.x - entity.group.position.x, dz = item.z - entity.group.position.z;
         if (Math.hypot(dx, dz) > .001) entity.group.children[0].rotation.y = Math.atan2(-dx, -dz);
@@ -472,7 +479,9 @@ export class BattlefieldRenderer {
       entity.group.position.set(item.x, 0, item.z);
       if (entity.kind === 'tank') {
         const recoil = Math.max(0, (entity.recoilUntil - performance.now()) / 240);
-        entity.group.children[0].position.z = recoil * .55;
+        const model = entity.group.children[0];
+        model.position.x = Math.sin(model.rotation.y) * recoil * .4;
+        model.position.z = Math.cos(model.rotation.y) * recoil * .4;
       }
       entity.selectable = isUnit && item.team === 'player' && item.state === 'gather';
       entity.selection.visible = entity.selectable && selected.has(item.id);
@@ -481,86 +490,51 @@ export class BattlefieldRenderer {
       entity.hp.userData.fill.position.x = -(1 - fraction) * (isUnit ? 1.8 : 4.5) / 2;
       entity.hp.userData.fill.material.color.setHex(fraction > .5 ? 0x76e6a3 : fraction > .25 ? 0xf8c65f : 0xff7065);
       entity.hp.quaternion.copy(this.camera.quaternion);
+      if ((!isUnit || ['tank', 'collector'].includes(item.kind)) && fraction < .5) {
+        entity.emission += dt;
+        if (entity.emission > .18) {
+          entity.emission = 0;
+          const origin = { x: item.x, y: isUnit ? 1.6 : 2.7, z: item.z };
+          if (fraction < .25) this.combatEffects.burn(origin, isUnit ? .65 : 1.2);
+          else this.combatEffects.smokePuff(origin, isUnit ? .7 : 1.3);
+        }
+      } else entity.emission = 0;
     }
-    for (const shot of snapshot.tank_shots || []) {
+    for (const shot of snapshot.shots || []) {
       if (shot.id <= this.lastShotId) continue;
       this.lastShotId = shot.id;
-      this.fireTank(shot);
+      const entity = this.entities.get(`${shot.source_is_unit ? 'u' : 'b'}${shot.source_id}`);
+      if (entity && shot.source_is_unit) {
+        entity.group.children[0].rotation.y = Math.atan2(shot.x - shot.target_x, shot.z - shot.target_z);
+        if (shot.kind === 'tank') entity.recoilUntil = now + 240;
+      }
+      this.combatEffects.fire(shot);
     }
     for (const [key, entity] of this.entities) if (!alive.has(key)) {
-      if (!restarting && entity.isUnit && entity.kind === 'tank') this.explodeTank(entity.group.position);
-      this.scene.remove(entity.group);
-      entity.group.traverse(object => {
-        if (object.geometry) object.geometry.dispose();
-        if (object.material && ![...mats.values()].includes(object.material)) object.material.dispose();
-      });
+      if (!restarting) this.combatEffects.destroy(entity);
+      this.removeEntity(entity);
       this.entities.delete(key);
     }
-    const now = performance.now();
-    this.effects = this.effects.filter(effect => {
-      const progress = Math.min(1, (now - effect.start) / effect.duration);
-      if (progress < 1) { effect.animate(progress); return true; }
-      this.scene.remove(effect.mesh);
-      effect.mesh.traverse(object => { object.geometry?.dispose(); object.material?.dispose(); });
-      return false;
-    });
-    const shake = Math.max(0, (this.shakeUntil - now) / 400);
+    this.combatEffects.update(dt, this.camera);
+    const shake = this.combatEffects.reducedMotion.matches ? 0 : this.combatEffects.shake;
     const focusZ = this.view === 'base' ? 30 : 0;
-    this.camera.position.set(Math.sin(now * .07) * shake * .3, 110 + Math.cos(now * .08) * shake * .16, 95 + focusZ);
+    this.camera.position.set(Math.sin(now * .07) * shake, 110 + Math.cos(now * .08) * shake * .5, 95 + focusZ);
     this.camera.updateMatrixWorld();
     this.renderer.render(this.scene, this.camera);
   }
-  fireTank(shot) {
-    const dx = shot.target_x - shot.x, dz = shot.target_z - shot.z;
-    const distance = Math.hypot(dx, dz) || 1;
-    const nx = dx / distance, nz = dz / distance;
-    const entity = this.entities.get(`u${shot.unit_id}`);
-    if (entity) {
-      entity.group.children[0].rotation.y = Math.atan2(-nx, -nz);
-      entity.recoilUntil = performance.now() + 240;
-    }
-    const start = new THREE.Vector3(shot.x + nx * 3.1, 1.7, shot.z + nz * 3.1);
-    const end = new THREE.Vector3(shot.target_x, 1.1, shot.target_z);
-    const mesh = new THREE.Group();
-    const shell = new THREE.Mesh(new THREE.SphereGeometry(.28, 8, 6), new THREE.MeshBasicMaterial({color: 0xffe2a0}));
-    const flash = new THREE.Mesh(new THREE.SphereGeometry(.8, 8, 6), new THREE.MeshBasicMaterial({color: 0xffa434, transparent: true}));
-    mesh.add(shell, flash); this.scene.add(mesh);
-    const duration = Math.max(170, Math.min(350, distance * 22));
-    this.effects.push({mesh, start: performance.now(), duration, animate: t => {
-      shell.position.lerpVectors(start, end, t);
-      flash.position.copy(start); flash.scale.setScalar(1 + t * 1.4); flash.material.opacity = Math.max(0, 1 - t * 5);
-    }});
+  removeEntity(entity) {
+    this.scene.remove(entity.group);
+    entity.group.traverse(object => {
+      object.geometry?.dispose();
+      if (object.material && ![...mats.values()].includes(object.material)) object.material.dispose();
+    });
   }
-  explodeTank(position) {
-    const mesh = new THREE.Group(); mesh.position.copy(position);
-    const colors = [0xffd16b, 0xff7929, 0x4b4035];
-    for (let i = 0; i < 9; i++) {
-      const part = new THREE.Mesh(new THREE.IcosahedronGeometry(i < 3 ? .9 : .55, 0), new THREE.MeshBasicMaterial({color: colors[i % 3], transparent: true}));
-      const angle = i * 2.4;
-      part.userData.velocity = new THREE.Vector3(Math.cos(angle) * (1 + i % 3), 1.4 + i % 3, Math.sin(angle) * (1 + i % 3));
-      mesh.add(part);
-    }
-    this.scene.add(mesh); this.shakeUntil = Math.max(this.shakeUntil, performance.now() + 400);
-    this.effects.push({mesh, start: performance.now(), duration: 750, animate: t => {
-      for (const part of mesh.children) {
-        part.position.copy(part.userData.velocity).multiplyScalar(t * 1.5); part.position.y += .5;
-        part.scale.setScalar(.4 + t * 1.7); part.material.opacity = 1 - t;
-      }
-    }});
+  dispose() {
+    this.resizeObserver.disconnect();
+    this.combatEffects.dispose();
+    for (const entity of this.entities.values()) this.removeEntity(entity);
+    this.entities.clear();
+    this.scene.traverse(object => { object.dispose?.(); object.geometry?.dispose(); });
+    this.renderer.dispose(); this.renderer.domElement.remove();
   }
-  showImpact(target, units) {
-    // A short tracer makes the simulation's damage events legible at battlefield scale.
-    let source = null, nearest = Infinity;
-    for (const unit of units) {
-      if (unit.team === target.team) continue;
-      const distance = Math.hypot(unit.x - target.x, unit.z - target.z);
-      if (distance < nearest) { nearest = distance; source = unit; }
-    }
-    if (!source || nearest > 25) return;
-    const geometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(source.x, 1.5, source.z), new THREE.Vector3(target.x, 1.5, target.z)]);
-    const material = new THREE.LineBasicMaterial({color: source.kind === 'rocket' ? 0xffa331 : 0xffe79c, transparent: true, opacity: 1, depthWrite: false});
-    const mesh = new THREE.Line(geometry, material); this.scene.add(mesh);
-    this.effects.push({mesh, start: performance.now(), duration: 180, animate: t => { material.opacity = 1 - t; }});
-  }
-  dispose() { this.resizeObserver.disconnect(); this.renderer.dispose(); this.renderer.domElement.remove(); }
 }
