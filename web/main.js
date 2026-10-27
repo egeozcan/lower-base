@@ -7,16 +7,17 @@ const specs = [
   { kind: 'soldier', name: 'RIFLE INFANTRY', cost: 60, icon: '<svg viewBox="0 0 48 48"><path fill="#c9b286" d="M18 15h13v13H18z"/><path fill="#6484bc" d="M13 17q0-15 11-15t12 15zM8 44V31l11-6h11l10 6v13z"/><path fill="#243126" d="M18 28h4v16h-4zm10 0h4v16h-4z"/><path stroke="#d5c69d" stroke-width="4" d="m8 39 34-12"/></svg>', key: '3' },
   { kind: 'rocket', name: 'ROCKET TROOPER', cost: 90, icon: '<svg viewBox="0 0 48 48"><path fill="#9aa477" d="m5 34 30-25 9 10-30 25z"/><path fill="#ddd09c" d="m28 15 7-6 9 10-7 6z"/><path fill="#252b24" d="m36 8 9 10 3-4-9-9zM15 31l7 8-5 7-8-8z"/></svg>', key: '4' },
   { kind: 'tank', name: 'SIEGE TANK', cost: 150, icon: '<svg viewBox="0 0 48 48"><path fill="#252b24" d="M3 26h42v17H3z"/><path fill="#a2aa7d" d="m6 24 5-7h26l6 7v11H6z"/><path fill="#6484bc" d="m15 15 4-7h15l5 7v8H15z"/><path stroke="#d4cfac" stroke-width="5" d="M26 14 44 4"/><path stroke="#858979" stroke-width="3" stroke-dasharray="5 3" d="M6 39h36"/></svg>', key: '5' },
+  { kind: 'demolition', name: 'DEMOLITION TRUCK', cost: 250, icon: '<svg viewBox="0 0 48 48"><path fill="#252b24" d="M3 29h42v12H3z"/><path fill="#6484bc" d="M3 20h12l5 10H3z"/><path fill="#b74f32" d="M21 12h22v21H21z"/><path fill="#e9c76a" d="m24 14 5 5-5 5 5 5h6l-5-5 5-5-5-5zm12 0 5 5-5 5 5 5h2V14z"/><path fill="#cbd1ac" d="M6 22h7l3 6H6z"/><circle fill="#161e1b" cx="11" cy="37" r="6"/><circle fill="#161e1b" cx="36" cy="37" r="6"/></svg>', key: '7' },
   { kind: 'collector', name: 'ORE COLLECTOR', cost: 200, icon: '<svg viewBox="0 0 48 48"><path fill="#252b24" d="M3 29h42v13H3z"/><path fill="#a2aa7d" d="M4 16h27v18H4z"/><path fill="#6484bc" d="M31 22h9l5 7v5H31z"/><path fill="#e9bd4c" d="m8 15 5-8 7 4 5-6 4 10z"/><path fill="#cbd1ac" d="M34 24h5l3 5h-8z"/><circle fill="#161e1b" cx="12" cy="37" r="6"/><circle fill="#161e1b" cx="36" cy="37" r="6"/></svg>', key: '6' },
 ];
 let game, renderer, snapshot, lastTime = 0, ended = false;
 function newGame() { return new GameBridge(crypto.getRandomValues(new Uint32Array(1))[0]); }
 
 function createProduction() {
-  $('production').innerHTML = specs.map(s => `<button type="button" class="unit-card" id="train-${s.kind}" title="Queue ${s.name} (${s.key})${s.kind === 'collector' ? ' — automatically mines ore and delivers credits to your refinery' : ''}"><span class="unit-art" aria-hidden="true">${s.icon}</span><span class="unit-info"><strong>${s.name}</strong></span><span class="unit-cost">◆ ${s.cost}</span></button>`).join('') + '<div class="queue-label">BARRACKS <strong id="barracks-queue">—</strong> &nbsp; / &nbsp; FACTORY <strong id="factory-queue">—</strong></div><div class="economy-note"><span id="economy-status"></span><span>Collectors mine gold ore and deliver credits to your refinery.</span></div>';
+  $('production').innerHTML = specs.map(s => `<button type="button" class="unit-card" id="train-${s.kind}" title="Queue ${s.name} (${s.key})${s.kind === 'collector' ? ' — automatically mines ore and delivers credits to your refinery' : s.kind === 'demolition' ? ' — 6s build, 140 HP. Explodes on attack or death: up to 450 damage, radius 7, damages allies. One fielded or queued.' : ''}"><span class="unit-art" aria-hidden="true">${s.icon}</span><span class="unit-info"><strong>${s.name}</strong>${s.kind === 'demolition' ? '<small id="demolition-status">FRIENDLY FIRE · LIMIT 1</small>' : ''}</span><span class="unit-cost">◆ ${s.cost}</span></button>`).join('') + '<div class="queue-label">BARRACKS <strong id="barracks-queue">—</strong> &nbsp; / &nbsp; FACTORY <strong id="factory-queue">—</strong></div><div class="economy-note"><span id="economy-status"></span><span>Collectors mine ore. Demo trucks explode on attack or death, damaging allies too. One per player.</span></div>';
   for (const s of specs) $(`train-${s.kind}`).addEventListener('click', () => { game.train(s.kind); refresh(); });
 }
-function queueText(queue) { return queue.length ? queue.map(k => ({soldier:'RIFLE', rocket:'ROCKET', tank:'TANK', collector:'COLLECTOR'}[k])).join(' › ') : 'IDLE'; }
+function queueText(queue) { return queue.length ? queue.map(k => ({soldier:'RIFLE', rocket:'ROCKET', tank:'TANK', collector:'COLLECTOR', demolition:'DEMO'}[k])).join(' › ') : 'IDLE'; }
 function setMode(mode) { game.set_mode(mode); selected.clear(); refresh(); }
 function sendSelected() { if (!selected.size) return; game.attack_selected(new Uint32Array([...selected])); selected.clear(); refresh(); }
 function onSelect(id, additive, touch) {
@@ -51,10 +52,13 @@ function refresh() {
   const refinery = snapshot.buildings.some(b => b.team === 'player' && b.kind === 'refinery');
   const collectors = snapshot.units.filter(u => u.team === 'player' && u.kind === 'collector').length;
   $('economy-status').textContent = `${collectors} COLLECTOR${collectors === 1 ? '' : 'S'} · REFINERY ${refinery ? 'ONLINE' : 'LOST'}`;
+  const demolitionQueued = snapshot.factory_queue.includes('demolition');
+  const demolitionAlive = snapshot.units.some(u => u.team === 'player' && u.kind === 'demolition');
+  $('demolition-status').textContent = demolitionAlive ? 'ACTIVE · LIMIT 1' : demolitionQueued ? 'QUEUED · LIMIT 1' : 'FRIENDLY FIRE · LIMIT 1';
   for (const s of specs) {
-    const building = ['tank', 'collector'].includes(s.kind) ? 'factory' : 'barracks';
+    const building = ['tank', 'collector', 'demolition'].includes(s.kind) ? 'factory' : 'barracks';
     const queue = building === 'factory' ? snapshot.factory_queue : snapshot.barracks_queue;
-    $(`train-${s.kind}`).disabled = snapshot.outcome !== 'playing' || snapshot.credits < s.cost || queue.length >= 8 || (s.kind === 'collector' && !refinery) || !snapshot.buildings.some(b => b.team === 'player' && b.kind === building);
+    $(`train-${s.kind}`).disabled = snapshot.outcome !== 'playing' || snapshot.credits < s.cost || queue.length >= 8 || (s.kind === 'demolition' && (demolitionAlive || demolitionQueued)) || (s.kind === 'collector' && !refinery) || !snapshot.buildings.some(b => b.team === 'player' && b.kind === building);
   }
   for (const [team, prefix] of [['player', 'friendly'], ['enemy', 'enemy']]) {
     const units = snapshot.units.filter(u => u.team === team);

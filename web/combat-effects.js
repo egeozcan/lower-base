@@ -69,8 +69,10 @@ export class CombatEffects {
     this.coolFlame = new THREE.Color(0xe23808);
     this.projectiles = [];
     this.remains = [];
+    this.shockwaves = [];
     this.time = 0;
     this.shake = 0;
+    this.demolitionShake = 0;
     this.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   }
   emit(type, position, options = {}) {
@@ -140,12 +142,43 @@ export class CombatEffects {
     this.projectiles.push({ mesh, start, end, age: 0, trail: 0, kind: shot.kind,
       duration: heavy ? Math.max(.1, start.distanceTo(end) / (shot.kind === 'tank' ? 65 : 36)) : .085 });
   }
+  explode(blast) {
+    const origin = { x: blast.x, y: 1.2, z: blast.z };
+    this.burst(origin, 3.8);
+    this.demolitionShake = 1;
+    // A fast ground-level pressure front, rising fireball and hot flying debris.
+    for (let i = 0; i < 24; i++) {
+      const angle = i / 24 * Math.PI * 2, speed = random(7, 12);
+      this.emit('dust', { ...origin, y: .25 }, { size: random(1.6, 2.8),
+        life: random(.8, 1.3), vx: Math.cos(angle) * speed,
+        vz: Math.sin(angle) * speed, vy: .35, color: 0xaaa080 });
+    }
+    for (let i = 0; i < 18; i++) {
+      this.emit('flame', origin, { size: random(2, 4), stretch: 1.6,
+        life: random(.5, 1), vx: random(-7, 7), vz: random(-7, 7),
+        vy: random(4, 12), color: 0xffb431 });
+      this.emit('spark', origin, { size: random(.15, .3), life: random(.7, 1.5),
+        vx: random(-15, 15), vz: random(-15, 15), vy: random(6, 16),
+        gravity: 16, color: 0xffe7a0 });
+    }
+    for (let i = 0; i < 8; i++) this.smokePuff({ ...origin, y: 2 + i * .6 }, random(3, 5));
+    const mesh = new THREE.Mesh(new THREE.RingGeometry(.85, 1, 48),
+      new THREE.MeshBasicMaterial({ color: 0xffbc50, transparent: true, opacity: .8,
+        side: THREE.DoubleSide, depthWrite: false }));
+    mesh.rotation.x = -Math.PI / 2; mesh.position.set(blast.x, .12, blast.z);
+    this.scene.add(mesh);
+    if (this.shockwaves.length >= 16) this.removeShockwave(this.shockwaves.shift());
+    this.shockwaves.push({ mesh, radius: blast.radius, age: 0 });
+  }
+  removeShockwave(wave) {
+    this.scene.remove(wave.mesh); wave.mesh.geometry.dispose(); wave.mesh.material.dispose();
+  }
   destroy(entity) {
-    const vehicle = ['tank', 'collector'].includes(entity.kind);
+    const vehicle = ['tank', 'collector', 'demolition'].includes(entity.kind);
     const heavy = vehicle || !entity.isUnit;
     const scale = !entity.isUnit ? 2.5 : vehicle ? 1.25 : .45;
     const position = entity.group.position.clone(); position.y = heavy ? 1.3 : .5;
-    this.burst(position, scale, heavy);
+    if (entity.kind !== 'demolition') this.burst(position, scale, heavy);
     // Keep the actual silhouette as a scorched wreck. The model is detached
     // before its selection and health UI are disposed by the renderer.
     const model = entity.group.children[0];
@@ -190,6 +223,15 @@ export class CombatEffects {
   update(dt, camera) {
     this.time += dt;
     this.shake = Math.max(0, this.shake - dt);
+    this.demolitionShake = Math.max(0, this.demolitionShake - dt);
+    this.shockwaves = this.shockwaves.filter(wave => {
+      wave.age += dt;
+      if (wave.age >= .85) { this.removeShockwave(wave); return false; }
+      const t = wave.age / .85;
+      wave.mesh.scale.setScalar(wave.radius * Math.min(1, t * 2));
+      wave.mesh.material.opacity = .8 * (1 - t);
+      return true;
+    });
     this.projectiles = this.projectiles.filter(p => {
       p.age += dt;
       const t = clamp(p.age / p.duration);
@@ -274,9 +316,11 @@ export class CombatEffects {
     }
   }
   clear() {
+    for (const wave of this.shockwaves) this.removeShockwave(wave);
+    this.shockwaves = [];
     for (const p of this.projectiles) this.removeProjectile(p);
     for (const r of this.remains) this.removeRemains(r);
-    this.projectiles = []; this.remains = []; this.shake = 0;
+    this.projectiles = []; this.remains = []; this.shake = 0; this.demolitionShake = 0;
     for (const batch of [this.smoke, this.glow]) { batch.particles = []; batch.mesh.count = 0; }
   }
   dispose() {

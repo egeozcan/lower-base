@@ -245,6 +245,25 @@ function unitMesh(u) {
     plate(2.1, .15, 1.4, 0, 2.1, -1.05, armor);
     plate(2.7, .45, .65, 0, .45, -2.05, mat(0xd4ae45));
     for (const x of [-.85, .85]) plate(.25, .2, .12, x, 1.15, -1.7, mat(0xffde8b));
+  } else if (u.kind === 'demolition') {
+    // Six wheels, a faction-painted cab, and an unmistakable hazard-striped charge.
+    const explosive = mat(0xac4930), warning = mat(0xf0cc51);
+    plate(2.1, .35, 3.6, 0, .65, 0, shadow);
+    for (const x of [-1.05, 1.05]) for (const z of [-1.15, .45, 1.3]) {
+      drum(.48, .48, .35, x, .48, z, shadow, 0, 0, Math.PI / 2, 10);
+      drum(.22, .22, .37, x, .48, z, metal, 0, 0, Math.PI / 2);
+    }
+    plate(1.85, 1.1, 1.15, 0, 1.3, -1.1, glow);
+    plate(1.5, .4, .08, 0, 1.55, -1.71, mat(0x97b9bf));
+    plate(2, .14, 1.35, 0, 1.91, -1.1, armor);
+    plate(1.8, 1.4, 2.1, 0, 1.5, .65, explosive);
+    for (const x of [-.92, .92]) {
+      plate(.05, .55, 2.1, x, 1.5, .65, warning);
+      for (const z of [-.05, .55, 1.15]) plate(.07, .57, .22, x, 1.5, z, shadow, -.5);
+    }
+    plate(1.85, .12, 2.15, 0, 2.25, .65, dark);
+    drum(.18, .18, .2, 0, 2.42, .45, mat(0xff6b28));
+    for (const x of [-.65, .65]) plate(.25, .18, .08, x, 1.05, -1.72, mat(0xffde8b));
   } else if (u.kind === 'tank') {
     // Squat riveted armor, exposed treads and a long conventional cannon.
     plate(2.2, .5, 3.05, 0, .48, .1, shadow);
@@ -431,6 +450,7 @@ export class BattlefieldRenderer {
     this.lastFrame = now;
     if (restarting) {
       this.lastShotId = 0;
+      this.lastExplosionId = 0;
       this.combatEffects.clear();
       for (const entity of this.entities.values()) this.removeEntity(entity);
       this.entities.clear();
@@ -463,18 +483,20 @@ export class BattlefieldRenderer {
         // A generous transparent target keeps individual soldiers easy to click.
         let hitTarget = null;
         if (isUnit) {
-          hitTarget = new THREE.Mesh(new THREE.SphereGeometry(['tank', 'collector'].includes(item.kind) ? 1.65 : 1.05, 8, 6), new THREE.MeshBasicMaterial({transparent: true, opacity: 0, depthWrite: false}));
+          hitTarget = new THREE.Mesh(new THREE.SphereGeometry(['tank', 'collector', 'demolition'].includes(item.kind) ? 1.65 : 1.05, 8, 6), new THREE.MeshBasicMaterial({transparent: true, opacity: 0, depthWrite: false}));
           hitTarget.position.y = 1; group.add(hitTarget);
         }
-        const selection = ring(isUnit && item.kind === 'tank' ? 1.8 : 1.25, 0x9eff40, .95); selection.visible = false; group.add(selection);
+        const selection = ring(isUnit && ['tank', 'demolition'].includes(item.kind) ? 1.8 : 1.25, 0x9eff40, .95); selection.visible = false; group.add(selection);
         const hp = healthBar(isUnit ? 1.8 : 4.5); hp.position.y = isUnit ? (item.kind === 'tank' ? 2.3 : 2.5) : (item.kind === 'command' ? 6.8 : 5.1); group.add(hp);
         this.scene.add(group); entity = {group, selection, hp, hitTarget, cargo, kind: item.kind, isUnit, selectable: false, recoilUntil: 0, emission: 0}; this.entities.set(key, entity);
       }
-      if (entity.cargo) {
+      if (entity.cargo || item.kind === 'demolition') {
         const dx = item.x - entity.group.position.x, dz = item.z - entity.group.position.z;
         if (Math.hypot(dx, dz) > .001) entity.group.children[0].rotation.y = Math.atan2(-dx, -dz);
-        entity.cargo.visible = item.cargo > 0;
-        entity.cargo.scale.y = item.cargo / 100;
+        if (entity.cargo) {
+          entity.cargo.visible = item.cargo > 0;
+          entity.cargo.scale.y = item.cargo / 100;
+        }
       }
       entity.group.position.set(item.x, 0, item.z);
       if (entity.kind === 'tank') {
@@ -490,7 +512,7 @@ export class BattlefieldRenderer {
       entity.hp.userData.fill.position.x = -(1 - fraction) * (isUnit ? 1.8 : 4.5) / 2;
       entity.hp.userData.fill.material.color.setHex(fraction > .5 ? 0x76e6a3 : fraction > .25 ? 0xf8c65f : 0xff7065);
       entity.hp.quaternion.copy(this.camera.quaternion);
-      if ((!isUnit || ['tank', 'collector'].includes(item.kind)) && fraction < .5) {
+      if ((!isUnit || ['tank', 'collector', 'demolition'].includes(item.kind)) && fraction < .5) {
         entity.emission += dt;
         if (entity.emission > .18) {
           entity.emission = 0;
@@ -510,6 +532,11 @@ export class BattlefieldRenderer {
       }
       this.combatEffects.fire(shot);
     }
+    for (const blast of snapshot.explosions || []) {
+      if (blast.id <= (this.lastExplosionId || 0)) continue;
+      this.lastExplosionId = blast.id;
+      this.combatEffects.explode(blast);
+    }
     for (const [key, entity] of this.entities) if (!alive.has(key)) {
       if (!restarting) this.combatEffects.destroy(entity);
       this.removeEntity(entity);
@@ -517,8 +544,13 @@ export class BattlefieldRenderer {
     }
     this.combatEffects.update(dt, this.camera);
     const shake = this.combatEffects.reducedMotion.matches ? 0 : this.combatEffects.shake;
+    const quake = this.combatEffects.reducedMotion.matches ? 0 : 1.6 * this.combatEffects.demolitionShake ** 2;
     const focusZ = this.view === 'base' ? 30 : 0;
-    this.camera.position.set(Math.sin(now * .07) * shake, 110 + Math.cos(now * .08) * shake * .5, 95 + focusZ);
+    this.camera.position.set(
+      Math.sin(now * .07) * shake + Math.sin(now * .113) * quake,
+      110 + Math.cos(now * .08) * shake * .5 + Math.cos(now * .137) * quake * .8,
+      95 + focusZ + Math.sin(now * .097) * quake * .6);
+
     this.camera.updateMatrixWorld();
     this.renderer.render(this.scene, this.camera);
   }
