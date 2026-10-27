@@ -75,6 +75,7 @@ function frame(now) {
   if (!lastTime) lastTime = now;
   const dt = Math.min((now - lastTime) / 1000, .1); lastTime = now;
   if (!ended) { game.update(dt); refresh(); }
+  else if (renderer && snapshot) renderer.update(snapshot, selected);
   requestAnimationFrame(frame);
 }
 $('gather').addEventListener('click', () => setMode('gather'));
