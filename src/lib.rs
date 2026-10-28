@@ -56,6 +56,12 @@ impl GameBridge {
     pub fn snapshot(&self) -> String {
         serde_json::to_string(&self.game).expect("game state should always serialize")
     }
+
+    /// Internal state is available only in explicitly instrumented local builds.
+    #[cfg(feature = "dev-debug")]
+    pub fn debug_snapshot(&self) -> String {
+        self.game.debug_snapshot()
+    }
 }
 
 impl Default for GameBridge {

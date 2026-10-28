@@ -28,7 +28,7 @@ jobs:
         run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
 
       - name: Build game
-        run: ./scripts/build-web.sh
+        run: ./scripts/build-web.sh --production
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5

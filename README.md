@@ -26,7 +26,7 @@ The main menu offers **Easy**, **Medium** (default), and **Hard** AI difficulty,
 
 - **Easy** reacts slowly, uses a predictable army mix, and sends small patrols with long gaps. A forgiving opponent for learning the game.
 - **Medium** uses the original adaptive production, regular attack waves, and defensive regrouping strategy.
-- **Hard** evaluates army health, damage matchups, and local pressure, invests in additional collectors when safe, and commits coordinated attack groups. It plans complementary production and saves for useful counters.
+- **Hard** switches between pressure, economic expansion, anti-armor, anti-infantry, defense, and finishing plans as battlefield conditions change. It weighs both damage and survivability when building counters, holds unfavorable engagements, reinforces successful pushes, and releases sheltered defenders when the base is breached. Against opening rushes it holds the firing line, restores mining income when the surviving attackers are safely outmatched, then counterattacks. Each match varies its opening, risk tolerance, plan duration, production ties, and assault timing; the same seed remains reproducible.
 
 All difficulties play fairly: both sides start with 500 credits, earn 24 passive credits per second, and have a 2,000-credit cap. Unit costs, build times, movement, combat, mining, and queue limits are identical. The whole battlefield is visible to both sides; AI decisions cannot inspect opposing production queues or sheltered units. Difficulty changes the commander's decisions, never its resources or unit stats. The selected difficulty applies to demos and rematches too.
 
@@ -49,3 +49,199 @@ The opposing commander adjusts its production to your army, retreats when an inc
 ## Development
 
 The Rust game simulation lives in `src/simulation.rs`, with a small WebAssembly bridge in `src/lib.rs`. The browser UI and renderer live in `web/`. Run `cargo test` for the simulation tests; rebuild the WebAssembly module after changing Rust code.
+
+
+## Local match debug exports
+
+`./scripts/build-web.sh` (or `--dev`) enables local debug recording. After a game
+or demo ends, **Download Debug Data** and **Copy Debug Data** appear alongside
+Play Again/Watch Again and Main Menu. Both export the same JSON report. If the
+browser denies clipboard access, a selected text area lets you copy manually.
+Export before starting another match or returning to the menu; recordings stay
+in browser memory and are cleared with the match.
+
+Reports include the seed, difficulty, demo flag, build revision and source hash,
+browser/viewport, player command order, every simulation update duration, snapshots
+every two simulated seconds, the final battlefield, both commanders' plans and
+random state, enemy resources and production queues. They contain no network
+uploads. Commands at tick `n` run before `updates[n]`; replay from the seed with
+the same game sources and recorded timing. Export/replay checks run against the
+actual built WebAssembly module:
+
+```sh
+./scripts/build-web.sh
+node --test scripts/test-debug-export.mjs
+# Verify an unchanged build against an export, or test a counter-strategy change.
+node scripts/replay-debug.mjs path/to/debug.json --verify
+node scripts/replay-debug.mjs path/to/debug.json --expect-ai-win
+```
+
+`./scripts/build-web.sh --production` disables recording, omits the internal-state
+WebAssembly API, and creates no export controls. The GitHub Pages workflow always
+uses this production mode. The build-mode configuration is generated inside the
+ignored `web/pkg/` directory, so local settings cannot be accidentally committed
+into the published game.
+
+## AI simulation benchmark
+
+The native tournament harness runs Hard against frozen stock Hard and scripted
+player strategies. The stock implementation comes from commit `91110ae`. The stock force estimator is
+preserved too, so future scoring changes cannot silently strengthen the baseline.
+Neither the frozen opponent nor the harness is included in normal WebAssembly builds.
+
+```sh
+# 12 seeds, both starting sides, standard starts (24 games).
+cargo run --release --features ai-bench --bin ai-bench
+
+# seed count, first seed, game time limit in seconds, scenario set.
+cargo run --release --features ai-bench --bin ai-bench -- 64 10000 360 stock > results.json
+
+# Target a single scenario family.
+cargo run --release --features ai-bench --bin ai-bench -- 16 0 360 rush
+cargo run --release --features ai-bench --bin ai-bench -- 64 10000 360 balanced
+cargo run --release --features ai-bench --bin ai-bench -- 16 0 360 player-armor
+
+# Compare paired reports and fail if rush wins do not improve or any balanced
+# match differs (including duration, surviving material and plan selections).
+python3 scripts/compare-ai-bench.py before.json after.json \
+  --require-balanced-identical --require-rush-improvement
+
+# Optional per-side army, economy, queue and strategy traces go to stderr.
+AI_BENCH_TRACE=1 cargo run --release --features ai-bench --bin ai-bench -- 1 26 180 all
+```
+
+JSON on stdout records every seed, side, scenario, actual win/loss or timeout,
+match duration, surviving army value and plan selections. The plan counters are
+ordered: pressure, economy, anti-armor, anti-infantry, defend, finish. Progress and
+traces use stderr. Timeouts count as draws, regardless of remaining material.
+Both commanders decide every 0.5 simulated seconds and share the real production,
+mining, movement, damage, and 0.05-second physics steps. Every map is played with
+the upgraded commander on each side.
+
+`stock` includes the standard opening, three tanks plus a soldier per side, ten
+soldiers per side, scarce ore (120 credits per deposit), and an early-rush stress
+test. The first four have balanced starting conditions. In the rush test stock
+Hard's original army starts already attacking across midfield, giving it a
+positional advantage; its units and resources are unchanged.
+
+`player-armor` runs the full 32-order player recording, its minimized 14-order
+tank-only version, and automated tank production with three collectors. The
+recordings use command times from a player-provided debug export, sampled every
+0.05 seconds. The automated player attacks at 32 seconds, retreats at 48, gathers
+at 51, and attacks again at 67, continuously producing tanks when affordable.
+All player profiles use ordinary orders and production rules. `all` runs all
+eight scenarios. The legacy `stock_surviving_value` JSON field records the
+opponent's surviving value, including for scripted player scenarios.
+
+### Earlier rush-defense validation
+
+Rush-defense development compared recovery windows of 12, 18, 24 and 30 seconds
+after observing opening pressure. Across seeds 0–15 and both sides, these won
+32/32, 10/32, 23/32 and 30/32 rush games respectively. A shorter recovery preserves
+the firing line and funds miners without giving the opponent too much rebuilding
+time. The selected 12-second window then won 64/64 rush games on seeds
+10000–10031. These seeds were development/verification data, not the final holdout.
+
+The final paired validation used **64 fresh seeds (20000–20063), five scenarios
+and both sides: 640 games per version**, with a six-minute limit. Both the
+pre-rush-defense commander and the final commander faced the same frozen stock
+Hard opponent. The final commander won **620/640 (96.9%)**, with 20 losses and
+no timeouts:
+
+| Starting condition | Before wins | After wins | After win rate |
+| --- | ---: | ---: | ---: |
+| Standard | 124/128 | 124/128 | 96.9% |
+| Armor-heavy | 120/128 | 120/128 | 93.8% |
+| Infantry-heavy | 127/128 | 127/128 | 99.2% |
+| Scarce ore | 121/128 | 121/128 | 94.5% |
+| Advanced-position rush | 80/128 | 128/128 | 100.0% |
+
+Rush wins increased from **62.5% to 100.0%**, gaining 48 wins and losing none.
+Every balanced match in this paired tournament was identical before and after,
+including time, surviving material and strategy counters: **492/512 wins (96.1%)**
+in each version. Rerunning the previous 512 balanced games (seeds 10000–10063)
+also reproduced every match exactly, retaining **489/512 wins (95.5%)**. Together
+that is **1,024 unchanged balanced matches**.
+
+Opening recovery reacts only to visible combat pressure during the first eight
+seconds. It holds gathered forces for up to twelve seconds after that observation,
+but never holds the last army after its production buildings are lost. Collectors
+are permitted against safely outmatched infantry survivors; incoming armor or
+trucks still take priority. Regular openings retain the same decisions and random
+streams. This explains why the balanced comparisons can be identical rather than
+merely retaining a similar aggregate win rate.
+
+The reports for this run are in `output/ai-rush-fresh-before.json`,
+`output/ai-rush-fresh-after.json`, `output/ai-rush-fresh-comparison.json` and
+`output/ai-rush-balanced-comparison.json` (local, ignored output artifacts). The
+pre-change source snapshot and executable are retained locally in
+`output/ai-before-rush.rs` and `output/ai-bench-before-rush`.
+
+These are comparisons against this stock commander, not evidence of equivalent
+performance against every human strategy. Regression tests cover stock rush
+matchups, condition-driven recovery and counters, economic safety, bounded
+counterattack delays, loss of production, ordinary openings, lower difficulties,
+private-information boundaries, resource fairness and reproducible variation.
+
+
+### Armor formation regression
+
+A player export exposed a formation problem: rockets move faster than tanks but
+have shorter range and much less health. Releasing the whole army at once put
+rockets ahead of their tank screen, where concentrated armor killed them before
+the rest of the wave arrived. The original export replayed exactly to a human
+victory at 125.98 seconds. Removing collectors, retreats and rocket purchases
+still left 14 tank-only orders that won. Reducing rocket production alone failed
+to resolve the replay.
+
+Hard now staggers rocket-heavy waves against visible massed armor. Tanks depart
+first; rockets are released when their estimated arrival lets the armored screen
+make contact first. In-range defenders fire immediately, and an army without a
+viable tank screen can still deploy. Regular mixed assaults use the existing wave
+logic. The rule uses visible positions, unit speeds and ranges; unit stats,
+resources, movement, targeting and damage are unchanged.
+
+The exact browser-frame replay is checked with `scripts/replay-debug.mjs`; the
+native benchmark adds the full/minimal recording and automated tank strategy
+across seeds and both starting sides. Regression tests also cover arrival order,
+missing screens, immediate combat and hidden garrisons. Local comparison reports
+and development probes are saved under `output/armor-strategy/`.
+
+
+Final formation validation used **64 new holdout seeds (40000–40063), eight
+scenarios, and both sides: 1,024 games per version**, separate from development
+and verification seeds. The before/after commanders both faced frozen stock Hard
+or the same scripted player orders; these are AI wins:
+
+| Opponent/scenario | Before | After |
+| --- | ---: | ---: |
+| Stock standard | 124/128 | 124/128 |
+| Stock armor-heavy | 113/128 | 113/128 |
+| Stock infantry-heavy | 127/128 | 127/128 |
+| Stock scarce ore | 124/128 | 124/128 |
+| Stock advanced-position rush | 126/128 | 126/128 |
+| Full player recording | 81/128 | 128/128 |
+| Minimized tank-only recording | 114/128 | 128/128 |
+| Continuous tank production | 20/128 | 70/128 |
+
+Every stock match retained its original outcome: **488/512 balanced wins** and
+**126/128 rush wins** in both versions. The three scripted player scenarios rose
+from **215/384 to 326/384 wins**, with no timeouts in either tournament. Continuous
+tank production remains a harder matchup; this change does not establish that
+Hard can beat every adaptive human armor strategy.
+
+The original high-frame-rate browser recording is also an exact regression case:
+the old AI lost at **125.98 seconds**; the final AI wins at **76.51 seconds** using
+the same player commands and frame durations. No replay or seed identifiers are
+consulted by the commander. To repeat the holdout and gate the comparison:
+
+```sh
+cargo run --release --features ai-bench --bin ai-bench -- 64 40000 360 all > after.json
+python3 scripts/compare-ai-bench.py before.json after.json \
+  --require-stock-outcomes-identical --require-player-armor-improvement
+```
+
+Local before/after reports are `output/armor-strategy/final-heldout-before.json`
+and `output/armor-strategy/final-heldout-after.json`; the paired summary is
+`output/armor-strategy/final-comparison.json`. The pre-change commander and runner
+are retained in that local output directory. These files are ignored artifacts.

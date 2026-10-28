@@ -2,8 +2,17 @@ use serde::Serialize;
 
 #[path = "ai.rs"]
 mod ai;
+#[cfg(any(test, feature = "ai-bench"))]
+#[path = "ai_benchmark.rs"]
+pub mod ai_benchmark;
+#[cfg(any(test, feature = "ai-bench"))]
+#[path = "balance_benchmark.rs"]
+pub mod balance_benchmark;
 #[path = "navigation.rs"]
 mod navigation;
+#[cfg(any(test, feature = "ai-bench"))]
+#[path = "stock_hard.rs"]
+mod stock_hard;
 
 const FIELD_EDGE: f32 = 17.0;
 const QUEUE_LIMIT: usize = 8;
@@ -140,10 +149,14 @@ impl UnitKind {
             (Self::Soldier, Some(Self::Rocket)) => 19.0,
             (Self::Soldier, Some(Self::Tank)) => 5.0,
             (Self::Soldier, _) => 12.0,
-            (Self::Rocket, Some(Self::Tank | Self::Collector | Self::Demolition)) => 52.0,
+            // Anti-armor damage must pay for the trooper's low health and
+            // slightly shorter range, including at equal total army cost.
+            (Self::Rocket, Some(Self::Tank)) => 78.0,
+            (Self::Rocket, Some(Self::Collector | Self::Demolition)) => 52.0,
             (Self::Rocket, Some(Self::Soldier | Self::Rocket)) => 13.0,
             (Self::Rocket, None) => 36.0,
-            (Self::Tank, Some(Self::Soldier | Self::Rocket)) => 34.0,
+            (Self::Tank, Some(Self::Soldier)) => 34.0,
+            (Self::Tank, Some(Self::Rocket)) => 18.0,
             (Self::Tank, _) => 28.0,
             (Self::Demolition | Self::Collector, _) => 0.0,
         }
@@ -307,6 +320,8 @@ pub struct Game {
     demo_wave_timer: f32,
     #[serde(skip)]
     ai_credits: f32,
+    #[serde(skip)]
+    hard_commanders: [ai::HardCommander; 2],
 }
 
 impl Default for Game {
@@ -315,6 +330,30 @@ impl Default for Game {
     }
 }
 impl Game {
+    #[cfg(feature = "dev-debug")]
+    pub(crate) fn debug_snapshot(&self) -> String {
+        #[derive(Serialize)]
+        struct DebugSnapshot<'a> {
+            state: &'a Game,
+            internal: serde_json::Value,
+        }
+        serde_json::to_string(&DebugSnapshot {
+            state: self,
+            internal: serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "enemy_credits": self.ai_credits,
+                "enemy_barracks_queue": self.enemy_barracks_queue,
+                "enemy_factory_queue": self.enemy_factory_queue,
+                "enemy_barracks_progress": self.enemy_barracks_progress,
+                "enemy_factory_progress": self.enemy_factory_progress,
+                "decision_timer": self.ai_decision_timer,
+                "wave_timers": [self.demo_wave_timer, self.ai_wave_timer],
+                "commanders": self.hard_commanders,
+            }),
+        })
+        .expect("debug state should always serialize")
+    }
+
     pub fn new() -> Self {
         Self::with_seed(1941)
     }
@@ -352,6 +391,10 @@ impl Game {
             ai_wave_timer: 7.0,
             demo_wave_timer: 7.0,
             ai_credits: STARTING_CREDITS,
+            hard_commanders: [
+                ai::HardCommander::new(seed ^ 0xa341316c),
+                ai::HardCommander::new(seed ^ 0xc8013ea4),
+            ],
         };
         for team in [Team::Player, Team::Enemy] {
             let z = if team == Team::Player { 43.0 } else { -43.0 };

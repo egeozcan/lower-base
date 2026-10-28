@@ -1,5 +1,7 @@
 import init, { GameBridge } from './pkg/lower_base.js';
 import { BattlefieldRenderer } from './renderer.js';
+import { BUILD_INFO } from './pkg/build_config.js';
+import { MatchDebugRecorder, createDebugActions } from './match-debug.mjs';
 
 const $ = id => document.getElementById(id);
 const selected = new Set();
@@ -11,10 +13,13 @@ const specs = [
   { kind: 'collector', name: 'ORE COLLECTOR', cost: 200, icon: '<svg viewBox="0 0 48 48"><path fill="#252b24" d="M3 29h42v13H3z"/><path fill="#a2aa7d" d="M4 16h27v18H4z"/><path fill="#6484bc" d="M31 22h9l5 7v5H31z"/><path fill="#e9bd4c" d="m8 15 5-8 7 4 5-6 4 10z"/><path fill="#cbd1ac" d="M34 24h5l3 5h-8z"/><circle fill="#161e1b" cx="12" cy="37" r="6"/><circle fill="#161e1b" cx="36" cy="37" r="6"/></svg>', key: '6' },
 ];
 let game, renderer, snapshot, lastTime = 0, ended = false, paused = false, demo = false;
+const debugEnabled = BUILD_INFO.development && typeof GameBridge.prototype.debug_snapshot === 'function';
+let debugRecorder = null, debugReport = null;
+const debugActions = debugEnabled ? createDebugActions(document.querySelector('#game-over .overlay-card'), () => debugReport) : null;
 const difficultyDescriptions = {
   easy: 'Slow reactions and small, predictable attack waves.',
   medium: 'Adaptive counters and regular attack waves.',
-  hard: 'Plans army matchups, expands its economy, and coordinates assaults.',
+  hard: 'Adapts its strategy, builds counters, and varies its attacks each match.',
 };
 for (const input of document.querySelectorAll('input[name="difficulty"]')) {
   input.addEventListener('change', () => {
@@ -22,13 +27,21 @@ for (const input of document.querySelectorAll('input[name="difficulty"]')) {
   });
 }
 function canCommand() { return game && !demo && !paused && !ended && snapshot?.outcome === 'playing'; }
-function train(kind) { if (canCommand()) { game.train(kind); refresh(); } }
+function train(kind) { if (canCommand()) { debugRecorder?.command('train', { kind }, snapshot.time); game.train(kind); refresh(); } }
 function beginMatch(isDemo = false) {
   demo = isDemo;
   game?.free();
   const seed = crypto.getRandomValues(new Uint32Array(1))[0];
   const difficulty = document.querySelector('input[name="difficulty"]:checked').value;
   game = GameBridge.with_difficulty(seed, difficulty, demo);
+  debugReport = null;
+  debugActions?.reset();
+  debugRecorder = debugEnabled ? new MatchDebugRecorder({
+    seed, difficulty, demo, build: BUILD_INFO,
+    started_at: new Date().toISOString(),
+    browser: navigator.userAgent,
+    viewport: { width: innerWidth, height: innerHeight, pixel_ratio: devicePixelRatio },
+  }, JSON.parse(game.debug_snapshot())) : null;
   selected.clear();
   snapshot = null;
   ended = false;
@@ -56,6 +69,9 @@ function beginMatch(isDemo = false) {
   }
 }
 function abortMatch() {
+  debugRecorder = null;
+  debugReport = null;
+  debugActions?.reset();
   game?.free();
   game = null;
   snapshot = null;
@@ -85,8 +101,8 @@ function createProduction() {
   for (const s of specs) $(`train-${s.kind}`).addEventListener('click', () => train(s.kind));
 }
 function queueText(queue) { return queue.length ? queue.map(k => ({soldier:'RIFLE', rocket:'ROCKET', tank:'TANK', collector:'COLLECTOR', demolition:'DEMO'}[k])).join(' › ') : 'IDLE'; }
-function setMode(mode) { if (!canCommand()) return; game.set_mode(mode); selected.clear(); refresh(); }
-function sendSelected() { if (!canCommand() || !selected.size) return; game.attack_selected(new Uint32Array([...selected])); selected.clear(); refresh(); }
+function setMode(mode) { if (!canCommand()) return; debugRecorder?.command('set_mode', { mode }, snapshot.time); game.set_mode(mode); selected.clear(); refresh(); }
+function sendSelected() { if (!canCommand() || !selected.size) return; debugRecorder?.command('attack_selected', { ids: [...selected] }, snapshot.time); game.attack_selected(new Uint32Array([...selected])); selected.clear(); refresh(); }
 function onSelect(id, additive, touch) {
   if (!canCommand()) return;
   // A tap on open ground clears the selection; a tap on a unit toggles it.
@@ -103,6 +119,7 @@ function onSelect(id, additive, touch) {
 function refresh() {
   if (!game) return;
   snapshot = JSON.parse(game.snapshot());
+  if (snapshot.outcome === 'playing') debugRecorder?.observe(snapshot, () => JSON.parse(game.debug_snapshot()));
   const selectable = new Set(snapshot.units.filter(u => u.team === 'player' && u.state === 'gather').map(u => u.id));
   for (const id of selected) if (!selectable.has(id)) selected.delete(id);
   $('credits').textContent = Math.floor(snapshot.credits).toLocaleString();
@@ -140,6 +157,14 @@ function refresh() {
   $('pause').disabled = snapshot.outcome !== 'playing';
   if (snapshot.outcome !== 'playing' && !ended) {
     ended = true;
+    if (debugRecorder) {
+      const report = debugRecorder.finish(JSON.parse(game.debug_snapshot()));
+      debugReport = {
+        text: JSON.stringify(report, null, 2),
+        filename: `lower-base-${report.metadata.seed}-${snapshot.outcome}-debug.json`,
+      };
+      debugActions.show();
+    }
     const victory = snapshot.outcome === 'victory';
     $('result-title').textContent = demo ? (victory ? 'BLUE WINS' : 'RED WINS') : (victory ? 'VICTORY' : 'DEFEAT');
     $('game-over').classList.remove('hidden');
@@ -150,7 +175,7 @@ function frame(now) {
   if (!lastTime) lastTime = now;
   const dt = Math.min((now - lastTime) / 1000, .1); lastTime = now;
   if (game && !paused) {
-    if (!ended) { game.update(dt); refresh(); }
+    if (!ended) { game.update(dt); debugRecorder?.updated(dt); refresh(); }
     else renderer.update(snapshot, selected);
   }
   requestAnimationFrame(frame);

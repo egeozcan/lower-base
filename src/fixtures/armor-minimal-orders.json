@@ -1,0 +1,100 @@
+[
+  {
+    "time": 2.9798956,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 3.1549146,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 3.3299148,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 13.653947,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 27.546667,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 31.830074,
+    "action": "set_mode",
+    "args": {
+      "mode": "attack"
+    }
+  },
+  {
+    "time": 32.538395,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 45.304604,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 57.01242,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 70.87108,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 81.46356,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 83.038666,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 94.006195,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 101.42334,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  }
+]

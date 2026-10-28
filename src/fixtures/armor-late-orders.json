@@ -1,0 +1,156 @@
+[
+  {
+    "time": 1.1166196,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 1.3249595,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 1.5000395,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 6.6498775,
+    "action": "train",
+    "args": {
+      "kind": "collector"
+    }
+  },
+  {
+    "time": 12.557359,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 19.16582,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 27.56664,
+    "action": "train",
+    "args": {
+      "kind": "collector"
+    }
+  },
+  {
+    "time": 29.258356,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 35.516586,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 39.56642,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 41.13306,
+    "action": "set_mode",
+    "args": {
+      "mode": "attack"
+    }
+  },
+  {
+    "time": 46.774487,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 46.99949,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 52.82428,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 55.115868,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 60.81498,
+    "action": "train",
+    "args": {
+      "kind": "collector"
+    }
+  },
+  {
+    "time": 64.99894,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 67.5074,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 73.44126,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 79.18349,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 80.72531,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 81.54206,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  }
+]
