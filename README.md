@@ -105,6 +105,7 @@ cargo run --release --features ai-bench --bin ai-bench -- 64 10000 360 stock > r
 cargo run --release --features ai-bench --bin ai-bench -- 16 0 360 rush
 cargo run --release --features ai-bench --bin ai-bench -- 64 10000 360 balanced
 cargo run --release --features ai-bench --bin ai-bench -- 16 0 360 player-armor
+cargo run --release --features ai-bench --bin ai-bench -- 16 0 360 mixed-wave
 
 # Compare paired reports and fail if rush wins do not improve or any balanced
 # match differs (including duration, surviving material and plan selections).
@@ -138,8 +139,13 @@ recordings use command times from a player-provided debug export, sampled every
 at 51, and attacks again at 67, continuously producing tanks when affordable.
 All player profiles use ordinary orders and production rules. `interception`
 starts Hard with no combat troops against an advancing eight-rifle wave, to
-exercise emergency demolition decisions. `all` runs all thirteen scenarios. The legacy `stock_surviving_value` JSON field records the
-opponent's surviving value, including for scripted player scenarios.
+exercise emergency demolition decisions. `mixed-wave` runs the third player
+recording, its minimized 16-order version, and three sustained combined-arms
+strategies with attacks at 14, 22, and 32 seconds. The automated armies maintain
+a two-rifle/one-rocket infantry mix, expand to two collectors, and build tanks
+with remaining factory time and credits. `all` runs all eighteen scenarios. The
+legacy `stock_surviving_value` JSON field records the opponent's surviving value,
+including for scripted player scenarios.
 
 ### Earlier rush-defense validation
 
@@ -256,7 +262,7 @@ and `output/armor-strategy/final-heldout-after.json`; the paired summary is
 are retained in that local output directory. These files are ignored artifacts.
 
 
-### Current counter balance and demolition interceptions
+### Counter balance and demolition interceptions
 
 Two player recordings exposed both formation problems and an insufficiently
 strong anti-tank counter. Pure rockets could narrowly beat equal-credit tanks,
@@ -300,7 +306,7 @@ small counterattacks into enemy rifle screens. It can leave recovery early after
 estimated advantage exceeds 1.8; the recovery window is bounded at 50 seconds
 after the opening observation.
 
-The latest paired tournament used seeds **60000–60031**, both sides, and thirteen
+The counter/interception paired tournament used seeds **60000–60031**, both sides, and thirteen
 scenarios: **832 games per commander**. Both commanders used the **new shared
 damage matrix**, so this comparison measures the AI changes without giving one
 side different unit rules. The control was the previous Hard policy without
@@ -325,3 +331,59 @@ Current reports are under `output/armor-strategy-2/`, including
 `balance-before.json`, `balance-after.json`, `heldout-before.json`,
 `heldout-after.json`, and `comparison.json`. The native baseline executable there
 uses the same new unit balance. Run `ai-bench --help` for all scenario selectors.
+
+### Mixed-army defense regression
+
+The third player export (`3249742994`) reproduced an AI loss at 73.62 seconds.
+Its rifle/rocket force attacked at 21.48 seconds and picked off stationary
+reserves row by row. Hard required a large global advantage before committing
+those reserves, even when its nearby army could support the fight. Reducing the
+recording from 30 orders to 16 retained the loss; removing any remaining order
+from that minimized replay prevented the recorded win.
+
+Hard now recognizes reserves taking fire from beyond their own range. Against
+rocket-heavy lines, it can commit a supported defense without waiting for the
+normal assault advantage or wave deadline. This requires a local power advantage
+and a competitive total army; opening-rush recovery and retreat decisions still
+apply. Tank-dominated lines retain the screened response: indiscriminate release
+on contact regressed an armor matchup, which is now a separate regression test.
+No unit stats or resource rules changed.
+
+The exact original browser frames and commands now produce an **AI win at 66.20
+seconds**. Both earlier player recordings still produce AI wins. Native tests
+also replay the full and minimized mixed attack from both starting sides.
+
+The final validation compared the previous commander with this change using
+seeds **72000–72015**, both sides and all eighteen scenarios: **576 games per
+version**, under identical unit rules:
+
+| Scenario family | Previous wins | Revised wins |
+| --- | ---: | ---: |
+| Four balanced stock scenarios | 78/128 | 79/128 |
+| Advanced-position rush | 30/32 | 30/32 |
+| Seven recorded/automated tank strategies | 224/224 | 224/224 |
+| No-army, unopposed-wave full matches | 0/32 | 0/32 |
+| Full mixed-army recording | 3/32 | 14/32 |
+| Minimized mixed-army recording | 23/32 | 28/32 |
+| Automated mixed attack at 14 seconds | 10/32 | 32/32 |
+| Automated mixed attack at 22 seconds | 10/32 | 32/32 |
+| Automated mixed attack at 32 seconds | 2/32 | 4/32 |
+
+Every stock scenario retained or improved its win count, with no timeouts. Mixed
+profiles improved from **48/160 to 110/160 wins**. This improves the reproduced
+weakness without establishing that Hard always wins mixed-army games; late
+banked attacks remain difficult. The no-army interception stress test retains its
+previous full-match result.
+
+Run the paired comparison with explicit regression gates:
+
+```sh
+cargo run --release --features ai-bench --bin ai-bench -- 16 72000 300 all > after.json
+python3 scripts/compare-ai-bench.py before.json after.json \
+  --require-stock-nonregression --require-mixed-wave-improvement
+```
+
+Local validation reports are `output/mixed-wave/heldout-before.json`,
+`output/mixed-wave/final-validation-after.json`, and
+`output/mixed-wave/final-validation-comparison.json`. Development comparisons and
+rejected probes are retained separately in that ignored directory.

@@ -33,5 +33,5 @@ try {
     player_units: final.state.units.filter(u => u.team === 'player').length,
     enemy_units: final.state.units.filter(u => u.team === 'enemy').length }));
   if (options.includes('--verify')) assert.deepEqual(final, report.final_state);
-  if (options.includes('--expect-ai-win')) assert.equal(final.state.outcome, 'defeat', 'AI should beat the recorded armor strategy');
+  if (options.includes('--expect-ai-win')) assert.equal(final.state.outcome, 'defeat', 'AI should beat the recorded strategy');
 } finally { game.free(); }

@@ -490,10 +490,31 @@ impl Game {
             Strategy::Finish => 2,
             _ => 5,
         };
+        // Reserves can be picked off row by row if they wait for a global
+        // advantage while longer-ranged enemies fire on the front line. Join
+        // that local fight when the defensive army can support the advance.
+        // Armor-dominated enemy lines still need the patient screened response.
+        let defending_contact = self.units.iter().any(|u| {
+            u.team == team
+                && u.state == UnitState::Gather
+                && COMBAT_KINDS.contains(&u.kind)
+                && self.units.iter().any(|enemy| {
+                    enemy.team != team
+                        && enemy.on_field()
+                        && COMBAT_KINDS.contains(&enemy.kind)
+                        && distance_sq(u.x, u.z, enemy.x, enemy.z) <= enemy.kind.range().powi(2)
+                        && distance_sq(u.x, u.z, enemy.x, enemy.z) > u.kind.range().powi(2)
+                })
+        });
         let launch = !retreat
             && (!recovering_rush || !can_rebuild)
             && reserves > 0
             && ((threatened && advantage > 1.25 + aggression * 0.2)
+                || (threatened
+                    && defending_contact
+                    && opposing.count[1] > opposing.count[2]
+                    && advantage > 0.9
+                    && defense > pressure * 1.05)
                 || !can_rebuild
                 || (wave <= 0.0
                     && ((reserves >= group_size && advantage > 1.25 + aggression * 0.2)

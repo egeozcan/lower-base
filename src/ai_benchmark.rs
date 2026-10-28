@@ -20,10 +20,15 @@ pub enum Scenario {
     ArmorTurtleLate,
     ArmorTurtleGreedy,
     UnopposedInfantry,
+    RecordedMixed,
+    MinimalMixed,
+    MixedAssault,
+    MixedAssaultEarly,
+    MixedAssaultLate,
 }
 
 impl Scenario {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 18] = [
         Self::Standard,
         Self::Armor,
         Self::Infantry,
@@ -37,6 +42,11 @@ impl Scenario {
         Self::ArmorTurtleLate,
         Self::ArmorTurtleGreedy,
         Self::UnopposedInfantry,
+        Self::RecordedMixed,
+        Self::MinimalMixed,
+        Self::MixedAssault,
+        Self::MixedAssaultEarly,
+        Self::MixedAssaultLate,
     ];
 }
 
@@ -151,6 +161,64 @@ fn armor_turtle(game: &mut Game, team: Team, scenario: Scenario) {
     }
 }
 
+// A sustained combined-arms attack, with independently varied launch timing.
+fn mixed_assault(game: &mut Game, team: Team, scenario: Scenario) {
+    let attack_at = match scenario {
+        Scenario::MixedAssaultEarly => 14.0,
+        Scenario::MixedAssaultLate => 32.0,
+        _ => 22.0,
+    };
+    let mode = if game.time < attack_at {
+        Mode::Gather
+    } else {
+        Mode::Attack
+    };
+    if game.team_mode(team) != mode {
+        game.set_team_mode(team, mode);
+    }
+    if game
+        .production_queue(team, BuildingKind::Barracks)
+        .is_empty()
+    {
+        let soldiers = game
+            .units
+            .iter()
+            .filter(|u| u.team == team && u.kind == UnitKind::Soldier)
+            .count();
+        let rockets = game
+            .units
+            .iter()
+            .filter(|u| u.team == team && u.kind == UnitKind::Rocket)
+            .count();
+        game.queue_unit(
+            team,
+            if soldiers < rockets * 2 {
+                UnitKind::Soldier
+            } else {
+                UnitKind::Rocket
+            },
+        );
+    }
+    let collectors = game
+        .units
+        .iter()
+        .filter(|u| u.team == team && u.kind == UnitKind::Collector)
+        .count();
+    if game
+        .production_queue(team, BuildingKind::Factory)
+        .is_empty()
+    {
+        game.queue_unit(
+            team,
+            if collectors < 1 || (game.time > 25.0 && collectors < 2) {
+                UnitKind::Collector
+            } else {
+                UnitKind::Tank
+            },
+        );
+    }
+}
+
 pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) -> MatchResult {
     let mut game = Game::demo_with_difficulty(seed, Difficulty::Hard);
     match scenario {
@@ -177,7 +245,12 @@ pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) ->
         | Scenario::RecordedArmorLate
         | Scenario::ArmorTurtleEarly
         | Scenario::ArmorTurtleLate
-        | Scenario::ArmorTurtleGreedy => (),
+        | Scenario::ArmorTurtleGreedy
+        | Scenario::RecordedMixed
+        | Scenario::MinimalMixed
+        | Scenario::MixedAssault
+        | Scenario::MixedAssaultEarly
+        | Scenario::MixedAssaultLate => (),
         Scenario::EarlyRush => {
             // A stress test: stock starts already advancing across midfield.
             // No extra units, resources, damage or speed are granted.
@@ -224,6 +297,11 @@ pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) ->
             | Scenario::ArmorTurtleEarly
             | Scenario::ArmorTurtleLate
             | Scenario::ArmorTurtleGreedy
+            | Scenario::RecordedMixed
+            | Scenario::MinimalMixed
+            | Scenario::MixedAssault
+            | Scenario::MixedAssaultEarly
+            | Scenario::MixedAssaultLate
     );
     let orders: Vec<RecordedOrder> = match scenario {
         Scenario::RecordedArmor => {
@@ -234,6 +312,12 @@ pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) ->
         }
         Scenario::RecordedArmorLate => {
             serde_json::from_str(include_str!("fixtures/armor-late-orders.json")).unwrap()
+        }
+        Scenario::RecordedMixed => {
+            serde_json::from_str(include_str!("fixtures/mixed-orders.json")).unwrap()
+        }
+        Scenario::MinimalMixed => {
+            serde_json::from_str(include_str!("fixtures/mixed-minimal-orders.json")).unwrap()
         }
         _ => Vec::new(),
     };
@@ -315,6 +399,13 @@ pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) ->
                         | Scenario::ArmorTurtleGreedy
                 ) {
                     armor_turtle(&mut game, opponent, scenario);
+                } else if matches!(
+                    scenario,
+                    Scenario::MixedAssault
+                        | Scenario::MixedAssaultEarly
+                        | Scenario::MixedAssaultLate
+                ) {
+                    mixed_assault(&mut game, opponent, scenario);
                 } else if !scripted {
                     game.ai_stock_hard(team);
                 }
@@ -414,6 +505,24 @@ mod tests {
             wins >= 17,
             "expected at least 17/18 wins against banked armor; got {wins}"
         );
+    }
+
+    #[test]
+    fn hard_handles_the_recorded_mixed_assault() {
+        for team in [Team::Player, Team::Enemy] {
+            for scenario in [Scenario::RecordedMixed, Scenario::MinimalMixed] {
+                let result = play(3_249_742_994, team, scenario, 300.0);
+                assert_eq!(result.hard_won, Some(true), "{team:?} {scenario:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn ranged_defense_does_not_break_the_screen_against_an_armored_assault() {
+        // A broad release-on-contact rule wins the mixed replay but loses this
+        // previously winning match by charging the armored firing line.
+        let result = play(71_012, Team::Player, Scenario::Armor, 300.0);
+        assert_eq!(result.hard_won, Some(true));
     }
 
     #[test]

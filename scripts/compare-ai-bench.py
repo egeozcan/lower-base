@@ -58,7 +58,9 @@ def main():
     parser.add_argument("--require-balanced-identical", action="store_true")
     parser.add_argument("--require-rush-improvement", action="store_true")
     parser.add_argument("--require-stock-outcomes-identical", action="store_true")
+    parser.add_argument("--require-stock-nonregression", action="store_true")
     parser.add_argument("--require-player-armor-improvement", action="store_true")
+    parser.add_argument("--require-mixed-wave-improvement", action="store_true")
     args = parser.parse_args()
     before, after = read_report(args.before), read_report(args.after)
     groups = compare(before, after)
@@ -78,6 +80,13 @@ def main():
                 before[key]["hard_won"] != after[key]["hard_won"]
                 for key in before if key[2] in scenarios):
             parser.exit(1, "stock outcomes changed or stock scenarios are missing\n")
+    if args.require_stock_nonregression:
+        scenarios = {"standard", "armor", "infantry", "scarce_ore", "early_rush"}
+        if not scenarios.issubset(groups) or any(
+                groups[scenario]["after_wins"] < groups[scenario]["before_wins"]
+                or groups[scenario]["after_draws"] > groups[scenario]["before_draws"]
+                for scenario in scenarios):
+            parser.exit(1, "stock scenario win rates regressed, timeouts increased, or scenarios are missing\n")
     if args.require_player_armor_improvement:
         scenarios = {"recorded_armor", "minimal_armor", "armor_turtle"}
         if not scenarios.issubset(groups) or any(
@@ -85,6 +94,15 @@ def main():
                 or groups[scenario]["after_draws"] > groups[scenario]["before_draws"]
                 for scenario in scenarios):
             parser.exit(1, "player armor scenarios did not improve, or timeouts increased\n")
+    if args.require_mixed_wave_improvement:
+        scenarios = {"recorded_mixed", "minimal_mixed", "mixed_assault",
+                     "mixed_assault_early", "mixed_assault_late"}
+        if not scenarios.issubset(groups) or any(
+                groups[scenario]["after_wins"] < groups[scenario]["before_wins"]
+                or groups[scenario]["after_draws"] > groups[scenario]["before_draws"]
+                for scenario in scenarios) or sum(groups[s]["after_wins"] for s in scenarios) <= sum(
+                    groups[s]["before_wins"] for s in scenarios):
+            parser.exit(1, "mixed-wave results did not improve, a scenario regressed, or scenarios are missing\n")
 
 
 if __name__ == "__main__":

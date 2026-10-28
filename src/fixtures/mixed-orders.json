@@ -1,0 +1,212 @@
+[
+  {
+    "time": 1.7250196,
+    "action": "train",
+    "args": {
+      "kind": "rocket"
+    }
+  },
+  {
+    "time": 3.7660344,
+    "action": "train",
+    "args": {
+      "kind": "soldier"
+    }
+  },
+  {
+    "time": 5.641593,
+    "action": "train",
+    "args": {
+      "kind": "collector"
+    }
+  },
+  {
+    "time": 6.7748995,
+    "action": "train",
+    "args": {
+      "kind": "rocket"
+    }
+  },
+  {
+    "time": 7.4998736,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 8.116546,
+    "action": "train",
+    "args": {
+      "kind": "rocket"
+    }
+  },
+  {
+    "time": 10.749829,
+    "action": "train",
+    "args": {
+      "kind": "soldier"
+    }
+  },
+  {
+    "time": 15.232823,
+    "action": "train",
+    "args": {
+      "kind": "rocket"
+    }
+  },
+  {
+    "time": 17.64144,
+    "action": "train",
+    "args": {
+      "kind": "soldier"
+    }
+  },
+  {
+    "time": 19.249775,
+    "action": "train",
+    "args": {
+      "kind": "soldier"
+    }
+  },
+  {
+    "time": 21.483168,
+    "action": "set_mode",
+    "args": {
+      "mode": "attack"
+    }
+  },
+  {
+    "time": 22.866566,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 24.324953,
+    "action": "train",
+    "args": {
+      "kind": "soldier"
+    }
+  },
+  {
+    "time": 26.483252,
+    "action": "train",
+    "args": {
+      "kind": "soldier"
+    }
+  },
+  {
+    "time": 29.599995,
+    "action": "train",
+    "args": {
+      "kind": "soldier"
+    }
+  },
+  {
+    "time": 32.975,
+    "action": "train",
+    "args": {
+      "kind": "rocket"
+    }
+  },
+  {
+    "time": 34.84161,
+    "action": "train",
+    "args": {
+      "kind": "soldier"
+    }
+  },
+  {
+    "time": 36.124542,
+    "action": "train",
+    "args": {
+      "kind": "rocket"
+    }
+  },
+  {
+    "time": 37.841507,
+    "action": "train",
+    "args": {
+      "kind": "soldier"
+    }
+  },
+  {
+    "time": 40.916416,
+    "action": "train",
+    "args": {
+      "kind": "rocket"
+    }
+  },
+  {
+    "time": 43.757984,
+    "action": "train",
+    "args": {
+      "kind": "soldier"
+    }
+  },
+  {
+    "time": 46.449577,
+    "action": "train",
+    "args": {
+      "kind": "soldier"
+    }
+  },
+  {
+    "time": 48.87447,
+    "action": "train",
+    "args": {
+      "kind": "rocket"
+    }
+  },
+  {
+    "time": 51.9744,
+    "action": "train",
+    "args": {
+      "kind": "soldier"
+    }
+  },
+  {
+    "time": 53.699364,
+    "action": "train",
+    "args": {
+      "kind": "rocket"
+    }
+  },
+  {
+    "time": 55.540928,
+    "action": "train",
+    "args": {
+      "kind": "soldier"
+    }
+  },
+  {
+    "time": 57.765804,
+    "action": "train",
+    "args": {
+      "kind": "rocket"
+    }
+  },
+  {
+    "time": 64.098915,
+    "action": "train",
+    "args": {
+      "kind": "tank"
+    }
+  },
+  {
+    "time": 65.032326,
+    "action": "train",
+    "args": {
+      "kind": "rocket"
+    }
+  },
+  {
+    "time": 66.88248,
+    "action": "train",
+    "args": {
+      "kind": "soldier"
+    }
+  }
+]
