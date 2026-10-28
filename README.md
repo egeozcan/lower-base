@@ -26,7 +26,12 @@ The main menu offers **Easy**, **Medium** (default), and **Hard** AI difficulty,
 
 - **Easy** reacts slowly, uses a predictable army mix, and sends small patrols with long gaps. A forgiving opponent for learning the game.
 - **Medium** uses the original adaptive production, regular attack waves, and defensive regrouping strategy.
-- **Hard** switches between pressure, economic expansion, anti-armor, anti-infantry, defense, and finishing plans as battlefield conditions change. It weighs both damage and survivability when building counters, holds unfavorable engagements, reinforces successful pushes, and releases sheltered defenders when the base is breached. Against opening rushes it holds the firing line, restores mining income when the surviving attackers are safely outmatched, then counterattacks. Each match varies its opening, risk tolerance, plan duration, production ties, and assault timing; the same seed remains reproducible.
+- **Hard** switches between pressure, economic expansion, anti-armor, anti-infantry, defense, and finishing plans as battlefield conditions change. It weighs both damage and survivability when building counters, holds unfavorable engagements, reinforces successful pushes, and releases sheltered defenders when the base is breached. Against opening rushes it holds the firing line and restores mining income before a decisive counterattack. It can build and immediately send a demolition truck against an unopposed wave when the blast can be delivered safely. Each match varies its opening, risk tolerance, plan duration, production ties, and assault timing; the same seed remains reproducible.
+
+At equal spending, **rifles beat rocket troopers, rockets beat tanks, and tanks
+beat rifles**. Rocket hits deal 78 damage to tanks; tank shells deal 18 damage to
+rocket troopers and 34 to rifles. Damage to buildings and demolition-truck targets
+is unchanged. Keep the units that counter the enemy force protected by a mixed army.
 
 All difficulties play fairly: both sides start with 500 credits, earn 24 passive credits per second, and have a 2,000-credit cap. Unit costs, build times, movement, combat, mining, and queue limits are identical. The whole battlefield is visible to both sides; AI decisions cannot inspect opposing production queues or sheltered units. Difficulty changes the commander's decisions, never its resources or unit stats. The selected difficulty applies to demos and rematches too.
 
@@ -125,12 +130,15 @@ Hard's original army starts already attacking across midfield, giving it a
 positional advantage; its units and resources are unchanged.
 
 `player-armor` runs the full 32-order player recording, its minimized 14-order
-tank-only version, and automated tank production with three collectors. The
+tank-only version, a second 22-order recording with a later attack, and four
+automated tank strategies (early attack, retreat/rebuild, late attack, and a
+four-collector economy). The
 recordings use command times from a player-provided debug export, sampled every
 0.05 seconds. The automated player attacks at 32 seconds, retreats at 48, gathers
 at 51, and attacks again at 67, continuously producing tanks when affordable.
-All player profiles use ordinary orders and production rules. `all` runs all
-eight scenarios. The legacy `stock_surviving_value` JSON field records the
+All player profiles use ordinary orders and production rules. `interception`
+starts Hard with no combat troops against an advancing eight-rifle wave, to
+exercise emergency demolition decisions. `all` runs all thirteen scenarios. The legacy `stock_surviving_value` JSON field records the
 opponent's surviving value, including for scripted player scenarios.
 
 ### Earlier rush-defense validation
@@ -163,8 +171,8 @@ in each version. Rerunning the previous 512 balanced games (seeds 10000–10063)
 also reproduced every match exactly, retaining **489/512 wins (95.5%)**. Together
 that is **1,024 unchanged balanced matches**.
 
-Opening recovery reacts only to visible combat pressure during the first eight
-seconds. It holds gathered forces for up to twelve seconds after that observation,
+That version's opening recovery reacted only to visible combat pressure during the first eight
+seconds. It held gathered forces for up to twelve seconds after that observation,
 but never holds the last army after its production buildings are lost. Collectors
 are permitted against safely outmatched infantry survivors; incoming armor or
 trucks still take priority. Regular openings retain the same decisions and random
@@ -184,7 +192,7 @@ counterattack delays, loss of production, ordinary openings, lower difficulties,
 private-information boundaries, resource fairness and reproducible variation.
 
 
-### Armor formation regression
+### Armor formation regression before counter rebalancing
 
 A player export exposed a formation problem: rockets move faster than tanks but
 have shorter range and much less health. Releasing the whole army at once put
@@ -198,8 +206,9 @@ Hard now staggers rocket-heavy waves against visible massed armor. Tanks depart
 first; rockets are released when their estimated arrival lets the armored screen
 make contact first. In-range defenders fire immediately, and an army without a
 viable tank screen can still deploy. Regular mixed assaults use the existing wave
-logic. The rule uses visible positions, unit speeds and ranges; unit stats,
-resources, movement, targeting and damage are unchanged.
+logic. The formation rule uses visible positions, unit speeds and ranges. That change
+left unit stats, resources, movement, targeting and damage unchanged; the later
+shared counter rebalance is described below.
 
 The exact browser-frame replay is checked with `scripts/replay-debug.mjs`; the
 native benchmark adds the full/minimal recording and automated tank strategy
@@ -245,3 +254,74 @@ Local before/after reports are `output/armor-strategy/final-heldout-before.json`
 and `output/armor-strategy/final-heldout-after.json`; the paired summary is
 `output/armor-strategy/final-comparison.json`. The pre-change commander and runner
 are retained in that local output directory. These files are ignored artifacts.
+
+
+### Current counter balance and demolition interceptions
+
+Two player recordings exposed both formation problems and an insufficiently
+strong anti-tank counter. Pure rockets could narrowly beat equal-credit tanks,
+but retained only 18.6% of their value on average. The revised shared damage
+matrix makes the counter cycle decisive:
+
+| Attacker | Rifle target | Rocket target | Tank target |
+| --- | ---: | ---: | ---: |
+| Rifle | 12 | 19 | 5 |
+| Rocket | 13 | 13 | **78** (was 52) |
+| Tank | 34 | **18** (was 34) | 28 |
+
+Costs, health, ranges, speed, reload times, income and building damage are
+unchanged. Rocket damage to collectors and demolition trucks remains 52. These
+values apply to human and computer units at every difficulty.
+
+`cargo run --release --features ai-bench --bin ai-bench -- --balance` runs 72
+real combat simulations at equal credit budgets: three army sizes, both starting
+sides, close and distant starts, and aligned/offset formations. No AI production,
+mining or buildings influence these tests:
+
+| Equal-credit counter | Wins | Average surviving army value |
+| --- | ---: | ---: |
+| Rifles against rockets | 24/24 | 81.5% |
+| Rockets against tanks | 24/24 | 69.2% |
+| Tanks against rifles | 24/24 | 70.7% |
+
+Hard also estimates demolition interceptions from visible enemy clusters, its
+own factory queue, available credits, build time and closing speed. It avoids
+blasts near friendly buildings, insufficient blast value, friendly coverage, and
+long-range armies that can destroy the truck in one volley. A completed truck is
+released through normal Gather/Attack orders, without waiting for the regular
+wave timer or remaining sheltered. Money, production time and the one-truck limit
+still apply. Regression battles verify an actual detonation, elimination of the
+incoming wave, and no base damage, on both sides.
+
+Rush recovery was recalibrated for the stronger counters. After an opening rush,
+Hard rebuilds a consolidated firing line and mining income, rather than feeding
+small counterattacks into enemy rifle screens. It can leave recovery early after
+20 seconds when two collectors are active, local pressure has passed, and its
+estimated advantage exceeds 1.8; the recovery window is bounded at 50 seconds
+after the opening observation.
+
+The latest paired tournament used seeds **60000–60031**, both sides, and thirteen
+scenarios: **832 games per commander**. Both commanders used the **new shared
+damage matrix**, so this comparison measures the AI changes without giving one
+side different unit rules. The control was the previous Hard policy without
+interceptions or recalibrated recovery:
+
+| Scenario family | Control wins | Current wins |
+| --- | ---: | ---: |
+| Four balanced stock scenarios | 164/256 | 164/256 |
+| Advanced-position rush | 37/64 | 62/64 |
+| Seven recorded/automated tank strategies | 448/448 | 448/448 |
+| No-army, unopposed-wave full matches | 0/64 | 0/64 |
+
+The unopposed-wave stress case intentionally grants the opponent eight combat
+units while Hard starts with none. Hard built and detonated an interceptor in
+**64/64** current-policy games; the control built none. This validates the
+interception behavior, not a guaranteed full-game recovery from that disadvantage.
+No tournament games timed out. Both exact browser-frame recordings now end in AI
+wins: **47.76 seconds** for the later attack and **53.25 seconds** for the first
+recording. The seven armor profiles all won across the heldout maps and sides.
+
+Current reports are under `output/armor-strategy-2/`, including
+`balance-before.json`, `balance-after.json`, `heldout-before.json`,
+`heldout-after.json`, and `comparison.json`. The native baseline executable there
+uses the same new unit balance. Run `ai-bench --help` for all scenario selectors.

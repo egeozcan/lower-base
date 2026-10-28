@@ -16,6 +16,9 @@ def read_report(path):
         raise ValueError(f"summary does not match results: {path}")
     indexed = {}
     for result in results:
+        # Older tournament reports predate demolition telemetry.
+        result.setdefault("hard_demolition_built", 0)
+        result.setdefault("explosions", 0)
         key = (result["seed"], result["hard_team"], result["scenario"])
         if key in indexed:
             raise ValueError(f"duplicate match: {key}")

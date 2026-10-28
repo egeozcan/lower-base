@@ -19,10 +19,11 @@ pub enum Scenario {
     ArmorTurtleEarly,
     ArmorTurtleLate,
     ArmorTurtleGreedy,
+    UnopposedInfantry,
 }
 
 impl Scenario {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Standard,
         Self::Armor,
         Self::Infantry,
@@ -35,6 +36,7 @@ impl Scenario {
         Self::ArmorTurtleEarly,
         Self::ArmorTurtleLate,
         Self::ArmorTurtleGreedy,
+        Self::UnopposedInfantry,
     ];
 }
 
@@ -51,6 +53,8 @@ pub struct MatchResult {
     pub stock_surviving_value: f32,
     /// Pressure, economy, anti-armor, anti-infantry, defend, finish.
     pub plans: [u32; 6],
+    pub hard_demolition_built: usize,
+    pub explosions: usize,
 }
 
 #[derive(serde::Deserialize)]
@@ -76,9 +80,7 @@ fn armor_turtle(game: &mut Game, team: Team, scenario: Scenario) {
     };
     let mode = if game.time < attack_at {
         Mode::Gather
-    } else if !matches!(scenario, Scenario::ArmorTurtle) {
-        Mode::Attack
-    } else if game.time < 48.0 {
+    } else if !matches!(scenario, Scenario::ArmorTurtle) || game.time < 48.0 {
         Mode::Attack
     } else if game.time < 51.0 {
         Mode::Retreat
@@ -152,6 +154,22 @@ fn armor_turtle(game: &mut Game, team: Team, scenario: Scenario) {
 pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) -> MatchResult {
     let mut game = Game::demo_with_difficulty(seed, Difficulty::Hard);
     match scenario {
+        Scenario::UnopposedInfantry => {
+            game.units.clear();
+            let opponent = if hard_team == Team::Player {
+                Team::Enemy
+            } else {
+                Team::Player
+            };
+            let direction = if hard_team == Team::Enemy { 1.0 } else { -1.0 };
+            for i in 0..8 {
+                game.spawn(opponent, UnitKind::Soldier);
+                let unit = game.units.last_mut().unwrap();
+                unit.x = (i % 4) as f32 * 2.0 - 3.0;
+                unit.z = (24.0 + (i / 4) as f32 * 2.0) * direction;
+                unit.state = UnitState::Attack;
+            }
+        }
         Scenario::Standard
         | Scenario::RecordedArmor
         | Scenario::MinimalArmor
@@ -225,6 +243,8 @@ pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) ->
         Team::Player
     };
     let mut next_order = 0;
+    let mut trucks = std::collections::HashSet::new();
+    let mut explosions = std::collections::HashSet::new();
     let dt = if scripted { 0.05 } else { 0.25 };
     let trace = std::env::var_os("AI_BENCH_TRACE").is_some();
     let ticks = (max_seconds / dt).ceil() as usize;
@@ -302,6 +322,16 @@ pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) ->
             until_decision = Difficulty::Hard.decision_interval();
         }
         game.update(dt);
+        for u in game
+            .units
+            .iter()
+            .filter(|u| u.team == hard_team && u.kind == UnitKind::Demolition)
+        {
+            trucks.insert(u.id);
+        }
+        for explosion in &game.explosions {
+            explosions.insert(explosion.id);
+        }
         if game.outcome != Outcome::Playing {
             break;
         }
@@ -330,6 +360,8 @@ pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) ->
             Team::Player
         }),
         plans: game.hard_commanders[if hard_team == Team::Player { 0 } else { 1 }].plans,
+        hard_demolition_built: trucks.len(),
+        explosions: explosions.len(),
     }
 }
 
@@ -367,16 +399,20 @@ mod tests {
     #[test]
     fn hard_handles_banked_armor_and_the_minimized_player_recording() {
         let mut wins = 0;
-        for seed in [2, 2_983_962_536] {
+        for seed in [2, 2_983_962_536, 2_451_821_014] {
             for team in [Team::Player, Team::Enemy] {
-                for scenario in [Scenario::RecordedArmor, Scenario::MinimalArmor] {
+                for scenario in [
+                    Scenario::RecordedArmor,
+                    Scenario::MinimalArmor,
+                    Scenario::RecordedArmorLate,
+                ] {
                     wins += usize::from(play(seed, team, scenario, 300.0).hard_won == Some(true));
                 }
             }
         }
         assert!(
-            wins >= 7,
-            "expected at least 7/8 wins against banked armor; got {wins}"
+            wins >= 17,
+            "expected at least 17/18 wins against banked armor; got {wins}"
         );
     }
 

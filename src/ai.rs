@@ -231,7 +231,7 @@ impl Game {
             u.team != team
                 && u.on_field()
                 && COMBAT_KINDS.contains(&u.kind)
-                && u.z * direction < 30.0
+                && u.z * direction < 25.0
         }) {
             let cluster: Vec<_> = self
                 .units
@@ -250,7 +250,11 @@ impl Game {
             }
             let travel = ((anchor.x - start_x).powi(2) + (after_build - start_z).powi(2)).sqrt()
                 / (speed + UnitKind::Demolition.speed());
-            let blast_z = (after_build - speed * travel) * direction;
+            // Detonation happens at attack range, before the truck reaches the
+            // enemy center. Its blast is correspondingly closer to our base.
+            let detonation_offset = UnitKind::Demolition.range() * UnitKind::Demolition.speed()
+                / (speed + UnitKind::Demolition.speed());
+            let blast_z = (after_build - speed * travel - detonation_offset) * direction;
             // Intercept in front of the base, with a margin for the prediction.
             if self.buildings.iter().any(|b| {
                 b.team == team && b.hp > 0.0 && {
@@ -374,9 +378,13 @@ impl Game {
         // Preserve the firing line instead of chasing survivors before the first
         // miners can pay for replacement troops. Ordinary openings are unchanged.
         if self.time < 8.0 && threatened {
-            commander.rush_recovery_until = self.time + 12.0;
+            commander.rush_recovery_until = self.time + 50.0;
         }
-        let recovering_rush = self.time < commander.rush_recovery_until;
+        // Stronger counters reward a consolidated firing line. End recovery
+        // early only after income is restored and a safe counterattack exists.
+        let counterattack_ready =
+            self.time > 20.0 && collectors >= 2 && !threatened && advantage > 1.8;
+        let recovering_rush = self.time < commander.rush_recovery_until && !counterattack_ready;
         // Immediate threats override plan commitment. Otherwise choose between
         // condition-appropriate plans, and retain them long enough to execute.
         let urgent = if threatened && pressure > defense * 0.85 {
@@ -435,7 +443,7 @@ impl Game {
                 u.team != team
                     && u.on_field()
                     && COMBAT_KINDS.contains(&u.kind)
-                    && u.z * direction < 30.0
+                    && u.z * direction < 25.0
             });
         let retreating = self.team_mode(team) == Mode::Retreat;
         let retreat = can_rebuild
@@ -736,6 +744,7 @@ mod tests {
                 (UnitKind::Rocket, 24.0),
                 (UnitKind::Tank, 24.0),
                 (UnitKind::Soldier, -20.0),
+                (UnitKind::Soldier, 27.0),
             ] {
                 let mut game = unopposed_infantry(team, kind, z);
                 assert!(
@@ -1023,7 +1032,10 @@ mod tests {
             g.demo_wave_timer = -30.0;
             g.ai_hard(team);
             let index = if team == Team::Player { 0 } else { 1 };
-            assert_eq!(g.hard_commanders[index].rush_recovery_until, 12.0);
+            assert!(
+                g.hard_commanders[index].rush_recovery_until > 0.0
+                    && g.hard_commanders[index].rush_recovery_until <= 60.0
+            );
             assert!(g
                 .units
                 .iter()
@@ -1034,7 +1046,7 @@ mod tests {
                 Some(&UnitKind::Collector)
             );
             // Once recovery ends, a favorable counterattack is allowed.
-            g.time = 13.0;
+            g.time = g.hard_commanders[index].rush_recovery_until + 1.0;
             g.units.retain(|u| u.team == team);
             g.ai_hard(team);
             assert!(g
@@ -1075,6 +1087,25 @@ mod tests {
             g.ai_hard(Team::Enemy);
             assert_eq!(g.hard_commanders[1].rush_recovery_until, 0.0);
         }
+    }
+
+    #[test]
+    fn rush_recovery_ends_early_when_income_and_a_decisive_counterattack_are_ready() {
+        let mut game = unopposed_infantry(Team::Enemy, UnitKind::Soldier, -12.0);
+        for _ in 0..8 {
+            game.spawn(Team::Enemy, UnitKind::Tank);
+        }
+        game.ai_hard(Team::Enemy);
+        assert!(game.hard_commanders[1].rush_recovery_until > 20.0);
+        game.units.retain(|u| u.team == Team::Enemy);
+        game.spawn(Team::Enemy, UnitKind::Collector);
+        game.spawn(Team::Enemy, UnitKind::Collector);
+        game.time = 21.0;
+        game.ai_wave_timer = -10.0;
+        game.ai_hard(Team::Enemy);
+        assert!(game.units.iter().any(|u| u.team == Team::Enemy
+            && u.kind == UnitKind::Tank
+            && u.state == UnitState::Attack));
     }
 
     #[test]
