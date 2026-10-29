@@ -59,6 +59,8 @@ for (const demo of [false, true]) {
       const recorder = new MatchDebugRecorder({ seed: 26, difficulty: 'hard', demo }, debug());
       const apply = (target, { action, args }) => {
         if (action === 'train') target.train(args.kind);
+        else if (action === 'cancel_training') target.cancel_training(args.building, args.index);
+        else if (action === 'eject_garrisoned') target.eject_garrisoned(args.id);
         else if (action === 'set_mode') target.set_mode(args.mode);
         else if (action === 'attack_selected') target.attack_selected(new Uint32Array(args.ids));
         else assert.fail(`unknown replay action: ${action}`);
@@ -66,13 +68,19 @@ for (const demo of [false, true]) {
       const orders = new Map([
         [0, { action: 'train', args: { kind: 'collector' } }],
         [3, { action: 'train', args: { kind: 'rocket' } }],
+        [4, { action: 'cancel_training', args: { building: 'barracks', index: 0 } }],
         [5, { action: 'attack_selected', args: { ids: debug().state.units.filter(u => u.team === 'player').slice(0, 2).map(u => u.id) } }],
         [10, { action: 'set_mode', args: { mode: 'retreat' } }],
-        [25, { action: 'set_mode', args: { mode: 'gather' } }],
-        [40, { action: 'set_mode', args: { mode: 'attack' } }],
+        [200, { action: 'set_mode', args: { mode: 'gather' } }],
+        [240, { action: 'set_mode', args: { mode: 'attack' } }],
       ]);
       let state = JSON.parse(game.snapshot());
       for (let tick = 0; tick < 20000 && state.outcome === 'playing'; tick++) {
+        if (!demo && tick === 150) {
+          const occupant = state.units.find(u => u.team === 'player' && u.state === 'garrison');
+          assert.ok(occupant, 'ejection replay must exercise a completed garrisoned unit');
+          orders.set(tick, { action: 'eject_garrisoned', args: { id: occupant.id } });
+        }
         if (!demo && orders.has(tick)) {
           const order = orders.get(tick);
           recorder.command(order.action, order.args, state.time);

@@ -15,7 +15,7 @@ mod navigation;
 mod stock_hard;
 
 const FIELD_EDGE: f32 = 17.0;
-const QUEUE_LIMIT: usize = 8;
+const QUEUE_LIMIT: usize = 9;
 const COLLECTOR_CAPACITY: f32 = 100.0;
 const MINING_RATE: f32 = 25.0;
 const STARTING_CREDITS: f32 = 500.0;
@@ -564,27 +564,10 @@ impl Game {
                 if mode == Mode::Retreat {
                     continue;
                 }
-                // Deploy through the front door, outside the building footprint.
-                if let Some(b) = self
-                    .buildings
-                    .iter()
-                    .find(|b| Some(b.id) == u.garrison && b.hp > 0.0)
-                {
-                    let direction = if team == Team::Player { 1.0 } else { -1.0 };
-                    let (_, half_z) = building_half_size(b.kind);
-                    u.x = b.x;
-                    u.z = b.z - direction * (half_z + u.kind.radius() + 0.3);
-                } else {
+                if !deploy_garrisoned_unit(u, &self.buildings, mode) {
                     u.hp = 0.0;
                     continue;
                 }
-                u.garrison = None;
-                u.state = if u.kind == UnitKind::Collector {
-                    UnitState::Harvest
-                } else {
-                    UnitState::Gather
-                };
-                u.navigation = navigation::Navigation::default();
             }
             if u.kind != UnitKind::Collector {
                 if mode == Mode::Attack {
@@ -597,6 +580,20 @@ impl Game {
         }
         self.resolve_collisions();
     }
+    pub fn eject_garrisoned(&mut self, id: u32) {
+        if self.demo || self.outcome != Outcome::Playing {
+            return;
+        }
+        let Some(unit) = self.units.iter_mut().find(|u| {
+            u.id == id && u.team == Team::Player && u.hp > 0.0 && u.state == UnitState::Garrison
+        }) else {
+            return;
+        };
+        if deploy_garrisoned_unit(unit, &self.buildings, self.mode) {
+            self.resolve_collisions();
+        }
+    }
+
     pub fn attack_selected(&mut self, ids: &[u32]) {
         if self.demo || self.outcome != Outcome::Playing || self.mode == Mode::Retreat {
             return;
@@ -615,6 +612,25 @@ impl Game {
             return;
         };
         self.queue_unit(Team::Player, kind);
+    }
+
+    pub fn cancel_training(&mut self, building: &str, index: usize) {
+        if self.demo || self.outcome != Outcome::Playing {
+            return;
+        }
+        let (queue, progress) = match building {
+            "barracks" => (&mut self.barracks_queue, &mut self.barracks_progress),
+            "factory" => (&mut self.factory_queue, &mut self.factory_progress),
+            _ => return,
+        };
+        if index >= queue.len() {
+            return;
+        }
+        let kind = queue.remove(index);
+        self.credits = (self.credits + kind.cost()).min(CREDIT_CAP);
+        if index == 0 {
+            *progress = 0.0;
+        }
     }
     // Reserving the slot at queue time prevents paying for blocked duplicates.
     fn has_demolition(&self, team: Team) -> bool {
@@ -742,13 +758,29 @@ impl Game {
         }
     }
 
+    fn occupied_production_slots(&self, team: Team, kind: BuildingKind) -> usize {
+        let host = self
+            .buildings
+            .iter()
+            .find(|b| b.team == team && b.kind == kind && b.hp > 0.0);
+        let sheltered = host.map_or(0, |b| {
+            self.units
+                .iter()
+                .filter(|u| {
+                    u.team == team
+                        && u.hp > 0.0
+                        && u.state == UnitState::Garrison
+                        && u.garrison == Some(b.id)
+                })
+                .count()
+        });
+        self.production_queue(team, kind).len() + sheltered
+    }
+
     fn queue_unit(&mut self, team: Team, kind: UnitKind) {
         // One purchase path for human and AI orders keeps all production rules equal.
         if !self.alive_building(team, kind.production_building())
-            || self
-                .production_queue(team, kind.production_building())
-                .len()
-                >= QUEUE_LIMIT
+            || self.occupied_production_slots(team, kind.production_building()) >= QUEUE_LIMIT
             || (kind == UnitKind::Collector && !self.alive_building(team, BuildingKind::Refinery))
             || (kind == UnitKind::Demolition && self.has_demolition(team))
         {
@@ -1386,6 +1418,30 @@ impl Game {
     }
 }
 
+// Individual ejection and mode-wide release use the same exit and deployment state.
+fn deploy_garrisoned_unit(unit: &mut Unit, buildings: &[Building], mode: Mode) -> bool {
+    let Some(building) = buildings
+        .iter()
+        .find(|b| Some(b.id) == unit.garrison && b.team == unit.team && b.hp > 0.0)
+    else {
+        return false;
+    };
+    let direction = if unit.team == Team::Player { 1.0 } else { -1.0 };
+    let (_, half_z) = building_half_size(building.kind);
+    unit.x = building.x;
+    unit.z = building.z - direction * (half_z + unit.kind.radius() + 0.3);
+    unit.garrison = None;
+    unit.state = if unit.kind == UnitKind::Collector {
+        UnitState::Harvest
+    } else if mode == Mode::Attack {
+        UnitState::Attack
+    } else {
+        UnitState::Gather
+    };
+    unit.navigation = navigation::Navigation::default();
+    true
+}
+
 fn demolition_damage(distance: f32) -> f32 {
     DEMOLITION_DAMAGE
         * ((DEMOLITION_RADIUS - distance) / (DEMOLITION_RADIUS - DEMOLITION_CORE)).clamp(0.0, 1.0)
@@ -1428,6 +1484,222 @@ fn distance_sq(x: f32, z: f32, other_x: f32, other_z: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn garrisons_and_queues_share_nine_slots_per_producer_and_team() {
+        for team in [Team::Player, Team::Enemy] {
+            for kind in [UnitKind::Soldier, UnitKind::Tank] {
+                let mut g = Game::new();
+                g.units.clear();
+                g.ai_decision_timer = 1000.0;
+                g.credits = CREDIT_CAP;
+                g.ai_credits = CREDIT_CAP;
+                g.set_team_mode(team, Mode::Retreat);
+                for _ in 0..9 {
+                    g.queue_unit(team, kind);
+                }
+                let producer = kind.production_building();
+                assert_eq!(g.production_queue(team, producer).len(), 9);
+                for _ in 0..800 {
+                    g.update(0.05);
+                    assert_eq!(g.occupied_production_slots(team, producer), 9);
+                    let queued = g.production_queue(team, producer).len();
+                    let credits = (g.credits, g.ai_credits);
+                    g.queue_unit(team, kind);
+                    assert_eq!(g.production_queue(team, producer).len(), queued);
+                    assert_eq!((g.credits, g.ai_credits), credits);
+                }
+                assert!(g.production_queue(team, producer).is_empty());
+                assert_eq!(
+                    g.units
+                        .iter()
+                        .filter(|u| u.team == team && u.state == UnitState::Garrison)
+                        .count(),
+                    9
+                );
+                // The other producer and opposing team still have their own slots.
+                let other_kind = if kind == UnitKind::Soldier {
+                    UnitKind::Tank
+                } else {
+                    UnitKind::Soldier
+                };
+                g.queue_unit(team, other_kind);
+                assert_eq!(
+                    g.production_queue(team, other_kind.production_building())
+                        .len(),
+                    1
+                );
+                let opponent = if team == Team::Player {
+                    Team::Enemy
+                } else {
+                    Team::Player
+                };
+                g.queue_unit(opponent, kind);
+                assert_eq!(g.production_queue(opponent, producer).len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn individual_ejection_preserves_retreat_and_frees_only_its_slot() {
+        let mut g = Game::new();
+        g.units.clear();
+        g.credits = CREDIT_CAP;
+        g.set_mode("retreat");
+        for kind in [
+            UnitKind::Soldier,
+            UnitKind::Rocket,
+            UnitKind::Tank,
+            UnitKind::Demolition,
+            UnitKind::Collector,
+        ] {
+            g.spawn(Team::Player, kind);
+        }
+        for _ in 0..7 {
+            g.train("soldier");
+        }
+        g.barracks_progress = 0.5;
+        let ids: Vec<_> = g.units.iter().map(|u| u.id).collect();
+        for (index, id) in ids.iter().enumerate() {
+            let credits = g.credits;
+            g.eject_garrisoned(*id);
+            assert_eq!(g.mode, Mode::Retreat);
+            assert_eq!(g.credits, credits);
+            assert_eq!(g.barracks_progress, 0.5);
+            assert_eq!(g.units.len(), ids.len());
+            let unit = g.units.iter().find(|u| u.id == *id).unwrap();
+            assert_eq!(unit.garrison, None);
+            assert_eq!(
+                unit.state,
+                if unit.kind == UnitKind::Collector {
+                    UnitState::Harvest
+                } else {
+                    UnitState::Gather
+                }
+            );
+            for building in &g.buildings {
+                let (hx, hz) = building_half_size(building.kind);
+                let dx = ((unit.x - building.x).abs() - hx).max(0.0);
+                let dz = ((unit.z - building.z).abs() - hz).max(0.0);
+                assert!(dx * dx + dz * dz >= (unit.kind.radius() - 0.01).powi(2));
+            }
+            assert!(g
+                .units
+                .iter()
+                .filter(|u| ids[index + 1..].contains(&u.id))
+                .all(|u| u.state == UnitState::Garrison));
+            if index == 0 {
+                g.train("soldier");
+                assert_eq!(g.barracks_queue.len(), 8);
+                assert_eq!(
+                    g.occupied_production_slots(Team::Player, BuildingKind::Barracks),
+                    9
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_ejections_do_not_release_units_or_change_resources() {
+        let mut g = Game::new();
+        g.units.clear();
+        g.set_mode("retreat");
+        g.set_team_mode(Team::Enemy, Mode::Retreat);
+        g.spawn(Team::Player, UnitKind::Soldier);
+        g.spawn(Team::Enemy, UnitKind::Soldier);
+        let id = g.units[0].id;
+        let credits = g.credits;
+        g.eject_garrisoned(u32::MAX);
+        g.eject_garrisoned(g.units[1].id);
+        g.demo = true;
+        g.eject_garrisoned(id);
+        g.demo = false;
+        g.outcome = Outcome::Victory;
+        g.eject_garrisoned(id);
+        g.outcome = Outcome::Playing;
+        let host = g.units[0].garrison;
+        g.buildings
+            .iter_mut()
+            .find(|b| Some(b.id) == host)
+            .unwrap()
+            .hp = 0.0;
+        g.eject_garrisoned(id);
+        assert!(g.units.iter().all(|u| u.state == UnitState::Garrison));
+        assert_eq!(g.credits, credits);
+    }
+
+    #[test]
+    fn production_queues_hold_nine_units_for_both_teams() {
+        for team in [Team::Player, Team::Enemy] {
+            for kind in [UnitKind::Soldier, UnitKind::Tank] {
+                let mut g = Game::new();
+                g.credits = CREDIT_CAP;
+                g.ai_credits = CREDIT_CAP;
+                for _ in 0..10 {
+                    g.queue_unit(team, kind);
+                }
+                assert_eq!(
+                    g.production_queue(team, kind.production_building()).len(),
+                    9
+                );
+                let credits = if team == Team::Player {
+                    g.credits
+                } else {
+                    g.ai_credits
+                };
+                assert_eq!(credits, CREDIT_CAP - 9.0 * kind.cost());
+            }
+        }
+    }
+
+    #[test]
+    fn cancel_training_refunds_and_only_resets_active_production() {
+        let mut g = Game::new();
+        g.train("soldier");
+        g.train("rocket");
+        g.train("soldier");
+        g.barracks_progress = 1.0;
+        g.cancel_training("barracks", 1);
+        assert_eq!(g.barracks_queue, vec![UnitKind::Soldier; 2]);
+        assert_eq!(g.barracks_progress, 1.0);
+        assert_eq!(g.credits, STARTING_CREDITS - 120.0);
+        g.cancel_training("barracks", 0);
+        assert_eq!(g.barracks_progress, 0.0);
+        g.update(0.1);
+        assert_eq!(g.barracks_queue, vec![UnitKind::Soldier]);
+        g.cancel_training("barracks", 0);
+        assert!(g.barracks_queue.is_empty());
+        assert_eq!(g.barracks_progress, 0.0);
+
+        g.train("demolition");
+        g.factory_progress = 3.0;
+        g.cancel_training("factory", 0);
+        assert_eq!(g.factory_progress, 0.0);
+        g.train("demolition");
+        assert_eq!(g.factory_queue, vec![UnitKind::Demolition]);
+        g.credits = CREDIT_CAP - 1.0;
+        g.cancel_training("factory", 0);
+        assert_eq!(g.credits, CREDIT_CAP);
+    }
+
+    #[test]
+    fn invalid_or_disabled_cancellations_do_not_change_state() {
+        let mut g = Game::new();
+        g.train("tank");
+        g.factory_progress = 1.0;
+        let credits = g.credits;
+        g.cancel_training("factory", 1);
+        g.cancel_training("command", 0);
+        g.cancel_training("barracks", 0);
+        g.demo = true;
+        g.cancel_training("factory", 0);
+        g.demo = false;
+        g.outcome = Outcome::Victory;
+        g.cancel_training("factory", 0);
+        assert_eq!(g.factory_queue, vec![UnitKind::Tank]);
+        assert_eq!(g.factory_progress, 1.0);
+        assert_eq!(g.credits, credits);
+    }
+
     fn isolated_units(kinds: &[(Team, UnitKind, f32, f32)]) -> Game {
         let mut g = Game::new();
         g.units.clear();

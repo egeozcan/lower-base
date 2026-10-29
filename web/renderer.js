@@ -1,5 +1,6 @@
 import * as THREE from './three.module.js';
 import { CombatEffects } from './combat-effects.js';
+import { ProductionQueues } from './production-queues.js';
 
 // The battlefield is deliberately made from simple, lit geometry so it remains
 // readable when dozens of units are moving at once.
@@ -369,7 +370,7 @@ function oreMesh(deposit) {
 }
 
 export class BattlefieldRenderer {
-  constructor(container, onSelect = () => {}) {
+  constructor(container, onSelect = () => {}, onCancelTraining = () => {}, onEjectGarrisoned = () => {}) {
     this.container = container; this.onSelect = onSelect; this.view = 'map';
     this.scene = new THREE.Scene(); this.scene.background = new THREE.Color(0x78805b);
     this.scene.fog = new THREE.Fog(0x78805b, 130, 230);
@@ -382,6 +383,7 @@ export class BattlefieldRenderer {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this.renderer.toneMappingExposure = 1.1;
     container.appendChild(this.renderer.domElement);
+    this.productionQueues = new ProductionQueues(container, onCancelTraining, onEjectGarrisoned);
     this.scene.add(new THREE.HemisphereLight(0xdde5ed, 0x625435, 2.0));
     const sun = new THREE.DirectionalLight(0xffe6b2, 3); sun.position.set(-30, 65, 25); sun.castShadow = true;
     sun.shadow.mapSize.set(compact ? 1024 : 2048, compact ? 1024 : 2048); Object.assign(sun.shadow.camera, {left:-60,right:60,top:70,bottom:-70,near:1,far:160}); sun.shadow.bias = -0.0005; this.scene.add(sun);
@@ -450,6 +452,7 @@ export class BattlefieldRenderer {
     this.combatEffects.clear();
     for (const entity of this.entities.values()) this.removeEntity(entity);
     this.entities.clear();
+    this.productionQueues.reset();
   }
   update(snapshot, selectedIds = []) {
     if (!snapshot) return;
@@ -461,6 +464,7 @@ export class BattlefieldRenderer {
       this.reset();
     }
     this.lastTime = snapshot.time;
+    this.productionQueues.update(snapshot, this.camera, this.container.clientWidth, this.container.clientHeight);
     const oreIds = new Set(snapshot.ore.filter(o => o.amount > 0).map(o => o.id));
     for (const deposit of snapshot.ore) {
       if (deposit.amount <= 0) continue;

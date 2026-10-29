@@ -58,7 +58,7 @@ function beginMatch(isDemo = false) {
   document.querySelector('.topbar').inert = false;
   document.querySelector('.layout').inert = false;
   try {
-    if (!renderer) renderer = new BattlefieldRenderer($('scene'), onSelect);
+    if (!renderer) renderer = new BattlefieldRenderer($('scene'), onSelect, cancelTraining, ejectGarrisoned);
     renderer.reset();
     setView('map');
     $('pause').focus();
@@ -97,10 +97,21 @@ function setPaused(value) {
 }
 
 function createProduction() {
-  $('production').innerHTML = specs.map(s => `<button type="button" class="unit-card" id="train-${s.kind}" title="Queue ${s.name} (${s.key})${s.kind === 'collector' ? ' — automatically mines ore and delivers credits to your refinery' : s.kind === 'demolition' ? ' — 6s build, 140 HP. Explodes on attack or death: up to 450 damage, radius 7, damages allies. One fielded or queued.' : ''}"><span class="unit-art" aria-hidden="true">${s.icon}</span><span class="unit-info"><strong>${s.name}</strong>${s.kind === 'demolition' ? '<small id="demolition-status">FRIENDLY FIRE · LIMIT 1</small>' : ''}</span><span class="unit-cost">◆ ${s.cost}</span></button>`).join('') + '<div class="queue-label">BARRACKS <strong id="barracks-queue">—</strong> &nbsp; / &nbsp; FACTORY <strong id="factory-queue">—</strong></div><div class="economy-note"><span id="economy-status"></span><span>Collectors mine ore. Demo trucks explode on attack or death, damaging allies too. One per player.</span></div>';
+  $('production').innerHTML = specs.map(s => `<button type="button" class="unit-card" id="train-${s.kind}" title="Queue ${s.name} (${s.key})${s.kind === 'collector' ? ' — automatically mines ore and delivers credits to your refinery' : s.kind === 'demolition' ? ' — 6s build, 140 HP. Explodes on attack or death: up to 450 damage, radius 7, damages allies. One fielded or queued.' : ''}"><span class="unit-art" aria-hidden="true">${s.icon}</span><span class="unit-info"><strong>${s.name}</strong>${s.kind === 'demolition' ? '<small id="demolition-status">FRIENDLY FIRE · LIMIT 1</small>' : ''}</span><span class="unit-cost">◆ ${s.cost}</span></button>`).join('') + '<div class="economy-note"><span id="economy-status"></span><span>Collectors mine ore. Demo trucks explode on attack or death, damaging allies too. One per player.</span></div>';
   for (const s of specs) $(`train-${s.kind}`).addEventListener('click', () => train(s.kind));
 }
-function queueText(queue) { return queue.length ? queue.map(k => ({soldier:'RIFLE', rocket:'ROCKET', tank:'TANK', collector:'COLLECTOR', demolition:'DEMO'}[k])).join(' › ') : 'IDLE'; }
+function cancelTraining(building, index) {
+  if (!canCommand()) return;
+  debugRecorder?.command('cancel_training', { building, index }, snapshot.time);
+  game.cancel_training(building, index);
+  refresh();
+}
+function ejectGarrisoned(id) {
+  if (!canCommand()) return;
+  debugRecorder?.command('eject_garrisoned', { id }, snapshot.time);
+  game.eject_garrisoned(id);
+  refresh();
+}
 function setMode(mode) { if (!canCommand()) return; debugRecorder?.command('set_mode', { mode }, snapshot.time); game.set_mode(mode); selected.clear(); refresh(); }
 function sendSelected() { if (!canCommand() || !selected.size) return; debugRecorder?.command('attack_selected', { ids: [...selected] }, snapshot.time); game.attack_selected(new Uint32Array([...selected])); selected.clear(); refresh(); }
 function onSelect(id, additive, touch) {
@@ -132,8 +143,6 @@ function refresh() {
   }
   $('selected-count').textContent = String(selected.size).padStart(2, '0');
   $('send-selected').disabled = !selected.size || !canCommand() || snapshot.mode === 'retreat';
-  $('barracks-queue').textContent = queueText(snapshot.barracks_queue);
-  $('factory-queue').textContent = queueText(snapshot.factory_queue);
   const refinery = snapshot.buildings.some(b => b.team === 'player' && b.kind === 'refinery');
   const collectors = snapshot.units.filter(u => u.team === 'player' && u.kind === 'collector').length;
   const sheltered = snapshot.units.filter(u => u.team === 'player' && u.state === 'garrison').length;
@@ -144,7 +153,9 @@ function refresh() {
   for (const s of specs) {
     const building = ['tank', 'collector', 'demolition'].includes(s.kind) ? 'factory' : 'barracks';
     const queue = building === 'factory' ? snapshot.factory_queue : snapshot.barracks_queue;
-    $(`train-${s.kind}`).disabled = !canCommand() || snapshot.credits < s.cost || queue.length >= 8 || (s.kind === 'demolition' && (demolitionAlive || demolitionQueued)) || (s.kind === 'collector' && !refinery) || !snapshot.buildings.some(b => b.team === 'player' && b.kind === building);
+    const producer = snapshot.buildings.find(b => b.team === 'player' && b.kind === building && b.hp > 0);
+    const occupants = snapshot.units.filter(u => u.team === 'player' && u.hp > 0 && u.state === 'garrison' && u.garrison === producer?.id).length;
+    $(`train-${s.kind}`).disabled = !canCommand() || snapshot.credits < s.cost || queue.length + occupants >= 9 || (s.kind === 'demolition' && (demolitionAlive || demolitionQueued)) || (s.kind === 'collector' && !refinery) || !producer;
   }
   for (const [team, prefix] of [['player', 'friendly'], ['enemy', 'enemy']]) {
     const units = snapshot.units.filter(u => u.team === team);

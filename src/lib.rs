@@ -49,6 +49,14 @@ impl GameBridge {
         self.game.train(kind);
     }
 
+    pub fn cancel_training(&mut self, building: &str, index: usize) {
+        self.game.cancel_training(building, index);
+    }
+
+    pub fn eject_garrisoned(&mut self, id: u32) {
+        self.game.eject_garrisoned(id);
+    }
+
     pub fn attack_selected(&mut self, ids: &[u32]) {
         self.game.attack_selected(ids);
     }
