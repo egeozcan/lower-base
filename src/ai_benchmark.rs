@@ -25,10 +25,14 @@ pub enum Scenario {
     MixedAssault,
     MixedAssaultEarly,
     MixedAssaultLate,
+    RecordedTankOpening,
+    TankOpening,
+    TankOpeningEarly,
+    TankOpeningLate,
 }
 
 impl Scenario {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 22] = [
         Self::Standard,
         Self::Armor,
         Self::Infantry,
@@ -47,6 +51,10 @@ impl Scenario {
         Self::MixedAssault,
         Self::MixedAssaultEarly,
         Self::MixedAssaultLate,
+        Self::RecordedTankOpening,
+        Self::TankOpening,
+        Self::TankOpeningEarly,
+        Self::TankOpeningLate,
     ];
 }
 
@@ -219,6 +227,55 @@ fn mixed_assault(game: &mut Game, team: Team, scenario: Scenario) {
     }
 }
 
+// Spend the opening bank on armor, then mass infantry behind it and attack
+// before the defender's economy pays off.
+fn tank_opening(game: &mut Game, team: Team, scenario: Scenario) {
+    let attack_at = match scenario {
+        Scenario::TankOpeningEarly => 12.0,
+        Scenario::TankOpeningLate => 24.0,
+        _ => 17.0,
+    };
+    let mode = if game.time < attack_at {
+        Mode::Gather
+    } else {
+        Mode::Attack
+    };
+    if game.team_mode(team) != mode {
+        game.set_team_mode(team, mode);
+    }
+    if game.time < 1.0 {
+        for _ in 0..3 {
+            game.queue_unit(team, UnitKind::Tank);
+        }
+    }
+    if game
+        .production_queue(team, BuildingKind::Barracks)
+        .is_empty()
+    {
+        let count = |kind| {
+            game.units
+                .iter()
+                .filter(|u| u.team == team && u.kind == kind)
+                .count()
+        };
+        game.queue_unit(
+            team,
+            if count(UnitKind::Rocket) * 2 < count(UnitKind::Soldier) {
+                UnitKind::Rocket
+            } else {
+                UnitKind::Soldier
+            },
+        );
+    }
+    if game.time > 40.0
+        && game
+            .production_queue(team, BuildingKind::Factory)
+            .is_empty()
+    {
+        game.queue_unit(team, UnitKind::Tank);
+    }
+}
+
 pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) -> MatchResult {
     let mut game = Game::demo_with_difficulty(seed, Difficulty::Hard);
     match scenario {
@@ -250,7 +307,11 @@ pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) ->
         | Scenario::MinimalMixed
         | Scenario::MixedAssault
         | Scenario::MixedAssaultEarly
-        | Scenario::MixedAssaultLate => (),
+        | Scenario::MixedAssaultLate
+        | Scenario::RecordedTankOpening
+        | Scenario::TankOpening
+        | Scenario::TankOpeningEarly
+        | Scenario::TankOpeningLate => (),
         Scenario::EarlyRush => {
             // A stress test: stock starts already advancing across midfield.
             // No extra units, resources, damage or speed are granted.
@@ -302,6 +363,10 @@ pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) ->
             | Scenario::MixedAssault
             | Scenario::MixedAssaultEarly
             | Scenario::MixedAssaultLate
+            | Scenario::RecordedTankOpening
+            | Scenario::TankOpening
+            | Scenario::TankOpeningEarly
+            | Scenario::TankOpeningLate
     );
     let orders: Vec<RecordedOrder> = match scenario {
         Scenario::RecordedArmor => {
@@ -318,6 +383,9 @@ pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) ->
         }
         Scenario::MinimalMixed => {
             serde_json::from_str(include_str!("fixtures/mixed-minimal-orders.json")).unwrap()
+        }
+        Scenario::RecordedTankOpening => {
+            serde_json::from_str(include_str!("fixtures/tank-opening-orders.json")).unwrap()
         }
         _ => Vec::new(),
     };
@@ -406,6 +474,11 @@ pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) ->
                         | Scenario::MixedAssaultLate
                 ) {
                     mixed_assault(&mut game, opponent, scenario);
+                } else if matches!(
+                    scenario,
+                    Scenario::TankOpening | Scenario::TankOpeningEarly | Scenario::TankOpeningLate
+                ) {
+                    tank_opening(&mut game, opponent, scenario);
                 } else if !scripted {
                     game.ai_stock_hard(team);
                 }
@@ -504,6 +577,28 @@ mod tests {
         assert!(
             wins >= 17,
             "expected at least 17/18 wins against banked armor; got {wins}"
+        );
+    }
+
+    #[test]
+    fn hard_contests_armor_first_infantry_rushes_that_outrange_its_line() {
+        // The recorded player parked tanks just beyond rocket range of the
+        // rally line and won while the defenders held position.
+        let mut wins = 0;
+        for seed in [14, 1001, 3_129_956_331] {
+            for team in [Team::Player, Team::Enemy] {
+                for scenario in [
+                    Scenario::RecordedTankOpening,
+                    Scenario::TankOpening,
+                    Scenario::TankOpeningEarly,
+                ] {
+                    wins += usize::from(play(seed, team, scenario, 300.0).hard_won == Some(true));
+                }
+            }
+        }
+        assert!(
+            wins >= 17,
+            "expected at least 17/18 wins against tank openings; got {wins}"
         );
     }
 

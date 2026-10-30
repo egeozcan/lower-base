@@ -25,7 +25,7 @@ fn main() {
         return;
     }
     if args.iter().any(|arg| arg == "--help") {
-        println!("ai-bench [seed-count=12] [first-seed=0] [max-seconds=360] [standard|rush|balanced|stock|player-armor|interception|mixed-wave|all]\nstock: five original scenarios; player-armor: three recordings and four automated tank strategies; interception: an unopposed infantry wave; mixed-wave: two recordings and three mixed-army attacks; all: all eighteen scenarios.\nai-bench --balance runs 72 equal-credit counter battles.\nPrints JSON; timeouts count as draws.");
+        println!("ai-bench [seed-count=12] [first-seed=0] [max-seconds=360] [standard|rush|balanced|stock|player-armor|interception|mixed-wave|tank-opening|all]\nstock: five original scenarios; player-armor: three recordings and four automated tank strategies; interception: an unopposed infantry wave; mixed-wave: two recordings and three mixed-army attacks; tank-opening: a recording and three armor-first infantry rushes; all: all twenty-two scenarios.\nai-bench --balance runs 72 equal-credit counter battles.\nPrints JSON; timeouts count as draws.");
         return;
     }
     let number = |i: usize, default: u32| -> u32 {
@@ -46,11 +46,12 @@ fn main() {
         "balanced" => &Scenario::ALL[..4],
         "player-armor" => &Scenario::ALL[5..12],
         "interception" => &Scenario::ALL[12..13],
-        "mixed-wave" => &Scenario::ALL[13..],
+        "mixed-wave" => &Scenario::ALL[13..18],
+        "tank-opening" => &Scenario::ALL[18..],
         "stock" => &Scenario::ALL[..5],
         "all" => &Scenario::ALL[..],
         _ => panic!(
-            "scenario must be standard, rush, balanced, player-armor, interception, mixed-wave, stock or all"
+            "scenario must be standard, rush, balanced, player-armor, interception, mixed-wave, tank-opening, stock or all"
         ),
     };
     let mut results = Vec::new();

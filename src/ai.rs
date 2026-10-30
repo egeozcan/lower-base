@@ -229,7 +229,10 @@ impl Game {
             .iter()
             .filter(|b| b.team == team && b.hp > 0.0 && b.kind == BuildingKind::Emplacement)
             .count();
-        if existing >= goal || infantry > tanks * 2 || own_tanks >= tanks {
+        // Attackers stop at their own range from the rally line, just outside
+        // gun coverage, so a gun only pays off once armor must close on the
+        // base. Against a rifle-heavy mix the money is needed in the field.
+        if existing >= goal || infantry > tanks || own_tanks >= tanks {
             return false;
         }
         let pad = self
@@ -555,9 +558,9 @@ impl Game {
             _ => 5,
         };
         // Reserves can be picked off row by row if they wait for a global
-        // advantage while longer-ranged enemies fire on the front line. Join
-        // that local fight when the defensive army can support the advance.
-        // Armor-dominated enemy lines still need the patient screened response.
+        // advantage while longer-ranged enemies fire on the front line. Rally
+        // positions cannot fall back further, so holding while outranged only
+        // trades units for nothing; contest the firing line even when weaker.
         let defending_contact = self.units.iter().any(|u| {
             u.team == team
                 && u.state == UnitState::Gather
@@ -574,11 +577,7 @@ impl Game {
             && (!recovering_rush || !can_rebuild)
             && reserves > 0
             && ((threatened && advantage > 1.25 + aggression * 0.2)
-                || (threatened
-                    && defending_contact
-                    && opposing.count[1] > opposing.count[2]
-                    && advantage > 0.9
-                    && defense > pressure * 1.05)
+                || (threatened && defending_contact)
                 || !can_rebuild
                 || (wave <= 0.0
                     && ((reserves >= group_size && advantage > 1.25 + aggression * 0.2)

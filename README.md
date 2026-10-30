@@ -26,7 +26,7 @@ The main menu offers **Easy**, **Medium** (default), and **Hard** AI difficulty,
 
 - **Easy** reacts slowly, uses a predictable army mix, and sends small patrols with long gaps. A forgiving opponent for learning the game.
 - **Medium** uses the original adaptive production, regular attack waves, and defensive regrouping strategy.
-- **Hard** switches between pressure, economic expansion, anti-armor, anti-infantry, defense, and finishing plans as battlefield conditions change. It weighs both damage and survivability when building counters, holds unfavorable engagements, reinforces successful pushes, and releases sheltered defenders when the base is breached. Against opening rushes it holds the firing line and restores mining income before a decisive counterattack. It can build and immediately send a demolition truck against an unopposed wave when the blast can be delivered safely. Each match varies its opening, risk tolerance, plan duration, production ties, and assault timing; the same seed remains reproducible.
+- **Hard** switches between pressure, economic expansion, anti-armor, anti-infantry, defense, and finishing plans as battlefield conditions change. It weighs both damage and survivability when building counters, holds unfavorable engagements unless longer-ranged attackers are picking off its defensive line, reinforces successful pushes, and releases sheltered defenders when the base is breached. Against opening rushes it holds the firing line and restores mining income before a decisive counterattack. It can build and immediately send a demolition truck against an unopposed wave when the blast can be delivered safely. Each match varies its opening, risk tolerance, plan duration, production ties, and assault timing; the same seed remains reproducible.
 
 At equal spending, **rifles beat rocket troopers, rockets beat tanks, and tanks
 beat rifles**. Rocket hits deal 78 damage to tanks; tank shells deal 18 damage to
@@ -108,6 +108,7 @@ cargo run --release --features ai-bench --bin ai-bench -- 16 0 360 rush
 cargo run --release --features ai-bench --bin ai-bench -- 64 10000 360 balanced
 cargo run --release --features ai-bench --bin ai-bench -- 16 0 360 player-armor
 cargo run --release --features ai-bench --bin ai-bench -- 16 0 360 mixed-wave
+cargo run --release --features ai-bench --bin ai-bench -- 16 0 360 tank-opening
 
 # Compare paired reports and fail if rush wins do not improve or any balanced
 # match differs (including duration, surviving material and plan selections).
