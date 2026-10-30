@@ -28,6 +28,12 @@ for (const input of document.querySelectorAll('input[name="difficulty"]')) {
 }
 function canCommand() { return game && !demo && !paused && !ended && snapshot?.outcome === 'playing'; }
 function train(kind) { if (canCommand()) { debugRecorder?.command('train', { kind }, snapshot.time); game.train(kind); refresh(); } }
+function buildEmplacement(slot) {
+  if (!canCommand()) return;
+  debugRecorder?.command('build_emplacement', { slot }, snapshot.time);
+  game.build_emplacement(slot);
+  refresh();
+}
 function beginMatch(isDemo = false) {
   demo = isDemo;
   game?.free();
@@ -162,7 +168,18 @@ function refresh() {
     const buildings = snapshot.buildings.filter(b => b.team === team);
     $(`${prefix}-units`).textContent = units.length;
     $(`${prefix}-buildings`).textContent = buildings.length;
-    $(`${prefix}-bar`).style.width = `${Math.max(0, Math.min(100, buildings.reduce((a,b) => a + b.hp / b.max_hp, 0) / 4 * 100))}%`;
+    $(`${prefix}-bar`).style.width = `${Math.max(0, Math.min(100, buildings.filter(b => b.kind !== 'emplacement').reduce((a,b) => a + b.hp / b.max_hp, 0) / 4 * 100))}%`;
+  }
+  const command = snapshot.buildings.some(b => b.team === 'player' && b.kind === 'command');
+  for (const slot of [0, 1]) {
+    const gun = snapshot.buildings.find(b => b.team === 'player' && b.defense_slot === slot);
+    const button = $(`defense-${slot}`);
+    button.disabled = !canCommand() || !!gun || !command || snapshot.credits < 200;
+    button.classList.toggle('online', !!gun && gun.construction_remaining <= 0);
+    button.classList.toggle('building', !!gun && gun.construction_remaining > 0);
+    button.querySelector('small').textContent = gun
+      ? gun.construction_remaining > 0 ? `BUILDING · ${Math.ceil(gun.construction_remaining)}s` : `ONLINE · ${Math.ceil(gun.hp)} HP`
+      : command ? '◆ 200 · BUILD' : 'COMMAND LOST';
   }
   if (!paused) renderer.update(snapshot, selected);
   $('pause').disabled = snapshot.outcome !== 'playing';
@@ -195,6 +212,7 @@ $('gather').addEventListener('click', () => setMode('gather'));
 $('attack').addEventListener('click', () => setMode('attack'));
 $('retreat').addEventListener('click', () => setMode('retreat'));
 $('send-selected').addEventListener('click', sendSelected);
+for (const slot of [0, 1]) $(`defense-${slot}`).addEventListener('click', () => buildEmplacement(slot));
 function setView(view) {
   if (!renderer || !game || paused) return;
   renderer.setView(view);
@@ -232,6 +250,8 @@ window.addEventListener('keydown', event => {
   if (event.key.toLowerCase() === 'r') setMode('retreat');
   const spec = specs.find(s => s.key === event.key);
   if (spec) train(spec.kind);
+  if (event.key === '8') buildEmplacement(0);
+  if (event.key === '9') buildEmplacement(1);
   if (event.key === 'Enter' && !(event.target instanceof HTMLButtonElement)) sendSelected();
   if (event.key === 'Escape') { selected.clear(); refresh(); }
 });

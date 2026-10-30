@@ -144,3 +144,17 @@
 .queue-unit:disabled{cursor:default}
 .queue-progress{display:none;position:absolute;bottom:1px;left:2px;right:2px;height:3px;border-radius:2px;background:#efd179;transform:scaleX(var(--progress,0));transform-origin:left}
 .is-building .queue-progress{display:block}
+
+/* Fixed defenses share the command panel on desktop and the mobile control deck. */
+.defenses{margin:12px 0;color:#e8e5cd}
+.defense-heading{display:flex;justify-content:space-between;gap:8px;font-size:10px;font-weight:600}
+.defense-heading span{font-size:8px;color:#acb69b}
+.defense-slots{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:7px}
+.defense-slots button{min-height:48px;padding:7px 5px;border:1px solid #85906a;background:linear-gradient(#4b5140,#333a2d);color:#efe5c2;font:700 15px 'Barlow Condensed',sans-serif}
+.defense-slots small{display:block;margin-top:4px;font:9px 'IBM Plex Mono',monospace;color:#f3d775}
+.defense-slots button:disabled{opacity:.5;cursor:default}
+.defense-slots button.online,.defense-slots button.building{opacity:1}
+.defense-slots button.online{border-color:#88b791}.defense-slots button.online small{color:#a4e7af}
+.defense-slots button.building{border-color:#e3c66b}
+.defenses p{font-size:9px;line-height:1.5;color:#b7c0a7;margin:6px 0 0}
+@media(max-width:700px){.selection-box{grid-row:1}.defenses{grid-column:1/-1;margin:2px 0}.defense-heading{font-size:9px}.defense-slots{margin-top:4px}.defense-slots button{min-height:44px;font-size:13px}.defenses p{display:none}.demo-mode .defenses{display:none}}

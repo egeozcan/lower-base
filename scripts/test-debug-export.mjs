@@ -59,6 +59,7 @@ for (const demo of [false, true]) {
       const recorder = new MatchDebugRecorder({ seed: 26, difficulty: 'hard', demo }, debug());
       const apply = (target, { action, args }) => {
         if (action === 'train') target.train(args.kind);
+        else if (action === 'build_emplacement') target.build_emplacement(args.slot);
         else if (action === 'cancel_training') target.cancel_training(args.building, args.index);
         else if (action === 'eject_garrisoned') target.eject_garrisoned(args.id);
         else if (action === 'set_mode') target.set_mode(args.mode);
@@ -73,6 +74,7 @@ for (const demo of [false, true]) {
         [10, { action: 'set_mode', args: { mode: 'retreat' } }],
         [200, { action: 'set_mode', args: { mode: 'gather' } }],
         [240, { action: 'set_mode', args: { mode: 'attack' } }],
+        [300, { action: 'build_emplacement', args: { slot: 0 } }],
       ]);
       let state = JSON.parse(game.snapshot());
       for (let tick = 0; tick < 20000 && state.outcome === 'playing'; tick++) {

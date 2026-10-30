@@ -193,6 +193,70 @@ impl HardCommander {
 }
 
 impl Game {
+    /// Save for a prepared position against visible massed armor. Never spend
+    /// emergency money on a pad already within enemy firing range.
+    pub(super) fn prepare_emplacement(&mut self, team: Team) -> bool {
+        if !self.alive_building(team, BuildingKind::Command) {
+            return false;
+        }
+        let tanks = self
+            .units
+            .iter()
+            .filter(|u| u.team != team && u.on_field() && u.kind == UnitKind::Tank)
+            .count();
+        let infantry = self
+            .units
+            .iter()
+            .filter(|u| u.team != team && u.on_field() && u.kind == UnitKind::Soldier)
+            .count();
+        // Static defense must not divert reinforcements from an army that
+        // already matches the opposing armor. This also avoids unnecessary
+        // purchases when a successful rush defense turns into a counterattack.
+        let own_tanks = self
+            .units
+            .iter()
+            .filter(|u| u.team == team && u.hp > 0.0 && u.kind == UnitKind::Tank)
+            .count();
+        let goal = if tanks >= 5 {
+            2
+        } else if tanks >= 3 {
+            1
+        } else {
+            0
+        };
+        let existing = self
+            .buildings
+            .iter()
+            .filter(|b| b.team == team && b.hp > 0.0 && b.kind == BuildingKind::Emplacement)
+            .count();
+        if existing >= goal || infantry > tanks * 2 || own_tanks >= tanks {
+            return false;
+        }
+        let pad = self
+            .defense_slots
+            .iter()
+            .find(|p| {
+                p.team == team
+                    && !self
+                        .buildings
+                        .iter()
+                        .any(|b| b.team == team && b.hp > 0.0 && b.defense_slot == Some(p.slot))
+                    && !self.units.iter().any(|u| {
+                        u.team != team
+                            && u.on_field()
+                            && u.kind != UnitKind::Collector
+                            && distance_sq(p.x, p.z, u.x, u.z) < 18.0_f32.powi(2)
+                    })
+            })
+            .copied();
+        let Some(pad) = pad else { return false };
+        let built = self.build_emplacement_for(team, pad.slot);
+        if team == Team::Enemy {
+            self.ai_status = "PREPARING AN ANTI-TANK POSITION".into();
+        }
+        !built
+    }
+
     fn demolition_interception(&self, team: Team) -> bool {
         if !self.alive_building(team, BuildingKind::Factory) || self.has_demolition(team) {
             return false;
@@ -597,6 +661,14 @@ impl Game {
                 return;
             }
         }
+        if self.prepare_emplacement(team) {
+            return;
+        }
+        let enemy_emplacements = self
+            .buildings
+            .iter()
+            .filter(|b| b.team != team && b.hp > 0.0 && b.kind == BuildingKind::Emplacement)
+            .count() as f32;
         let collector_goal = if recovering_rush {
             2
         } else if strategy == Strategy::Economy {
@@ -651,7 +723,11 @@ impl Game {
                 let mut projected = own.clone();
                 projected.add(kind, kind.health());
                 let desired = match kind {
-                    UnitKind::Soldier => 1.0 + opposing.count[1] * 1.4 + opposing.count[0] * 0.25,
+                    UnitKind::Soldier => {
+                        1.0 + opposing.count[1] * 1.4
+                            + opposing.count[0] * 0.25
+                            + enemy_emplacements * 4.0
+                    }
                     UnitKind::Rocket => 1.0 + opposing.count[2] * 1.8 + trucks as f32 * 3.0,
                     _ => 1.0 + opposing.count[0] * 0.65,
                 };

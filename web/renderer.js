@@ -85,7 +85,16 @@ function buildingMesh(b) {
   const darkAccent = b.team === 'player' ? C.playerDark : C.enemyDark;
   const glow = mat(accent), armor = mat(b.team === 'player' ? 0xb3b09a : 0x9b9380), dark = mat(C.dark), edge = mat(darkAccent);
   const steel = mat(0x999b8d), shadow = mat(0x4c5146), caution = mat(0xe1bd49);
-  if (b.kind === 'command') {
+  if (b.kind === 'emplacement') {
+    body.rotation.y = 0;
+    cylinder(body, 1.7, 1.7, .3, 0, .2, 0, shadow, 12);
+    cylinder(body, .8, 1.15, .65, 0, .65, 0, dark, 12);
+    box(body, 2.5, 1.25, .45, 0, 1.35, -.4, armor);
+    box(body, 2.55, .18, .5, 0, 2, -.4, glow);
+    box(body, .34, .34, 3.5, 0, 1.8, -1.4, steel);
+    box(body, .55, .5, .7, 0, 1.8, -3.1, dark);
+    for (const x of [-.8, .8]) box(body, .3, .25, 2.1, x, .5, .7, edge, x * .3);
+  } else if (b.kind === 'command') {
     // A stepped headquarters with a raised reactor and communications crown.
     box(body, 7.3, .52, 6.6, 0, .28, 0, dark);
     box(body, 6.8, .35, 6.1, 0, .67, 0, edge);
@@ -388,6 +397,7 @@ export class BattlefieldRenderer {
     const sun = new THREE.DirectionalLight(0xffe6b2, 3); sun.position.set(-30, 65, 25); sun.castShadow = true;
     sun.shadow.mapSize.set(compact ? 1024 : 2048, compact ? 1024 : 2048); Object.assign(sun.shadow.camera, {left:-60,right:60,top:70,bottom:-70,near:1,far:160}); sun.shadow.bias = -0.0005; this.scene.add(sun);
     addEnvironment(this.scene);
+    this.defensePads = new Map();
     this.entities = new Map(); this.oreFields = new Map(); this.combatEffects = new CombatEffects(this.scene, compact); this.lastShotId = 0; this.lastTime = 0; this.lastFrame = performance.now(); this.raycaster = new THREE.Raycaster(); this.pointer = new THREE.Vector2();
     const pointerStarts = new Map();
     this.renderer.domElement.addEventListener('pointerdown', event => {
@@ -464,6 +474,19 @@ export class BattlefieldRenderer {
       this.reset();
     }
     this.lastTime = snapshot.time;
+    for (const pad of snapshot.defense_slots || []) {
+      const key = `${pad.team}-${pad.slot}`;
+      if (!this.defensePads.has(key)) {
+        const marker = new THREE.Group();
+        const outline = ring(2.3, pad.team === 'player' ? 0x9bc5ff : 0xffa18b, .85);
+        marker.add(outline);
+        box(marker, 1.5, .05, .12, 0, .1, 0, mat(0xe3c66b));
+        box(marker, .12, .05, 1.5, 0, .1, 0, mat(0xe3c66b));
+        marker.position.set(pad.x, .04, pad.z);
+        this.defensePads.set(key, marker);
+        this.scene.add(marker);
+      }
+    }
     this.productionQueues.update(snapshot, this.camera, this.container.clientWidth, this.container.clientHeight);
     const oreIds = new Set(snapshot.ore.filter(o => o.amount > 0).map(o => o.id));
     for (const deposit of snapshot.ore) {
@@ -509,6 +532,12 @@ export class BattlefieldRenderer {
       }
       entity.group.position.set(item.x, 0, item.z);
       entity.group.visible = item.state !== 'garrison';
+      if (item.kind === 'emplacement') {
+        const model = entity.group.children[0];
+        model.rotation.y = item.facing;
+        model.scale.y = .25 + .75 * (1 - item.construction_remaining / 8);
+        entity.hp.position.y = 3;
+      }
       if (entity.kind === 'tank') {
         const recoil = Math.max(0, (entity.recoilUntil - performance.now()) / 240);
         const model = entity.group.children[0];
@@ -517,7 +546,7 @@ export class BattlefieldRenderer {
       }
       entity.selectable = isUnit && item.team === 'player' && item.state === 'gather';
       entity.selection.visible = entity.selectable && selected.has(item.id);
-      entity.hp.visible = item.hp < item.max_hp || entity.selection.visible;
+      entity.hp.visible = item.hp < item.max_hp || entity.selection.visible || item.construction_remaining > 0;
       const fraction = Math.max(0, item.hp / item.max_hp); entity.hp.userData.fill.scale.x = fraction;
       entity.hp.userData.fill.position.x = -(1 - fraction) * (isUnit ? 1.8 : 4.5) / 2;
       entity.hp.userData.fill.material.color.setHex(fraction > .5 ? 0x76e6a3 : fraction > .25 ? 0xf8c65f : 0xff7065);

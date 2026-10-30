@@ -49,6 +49,10 @@ impl GameBridge {
         self.game.train(kind);
     }
 
+    pub fn build_emplacement(&mut self, slot: usize) {
+        self.game.build_emplacement(slot);
+    }
+
     pub fn cancel_training(&mut self, building: &str, index: usize) {
         self.game.cancel_training(building, index);
     }

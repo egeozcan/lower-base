@@ -8,6 +8,9 @@ pub mod ai_benchmark;
 #[cfg(any(test, feature = "ai-bench"))]
 #[path = "balance_benchmark.rs"]
 pub mod balance_benchmark;
+#[cfg(test)]
+#[path = "emplacement_tests.rs"]
+mod emplacement_tests;
 #[path = "navigation.rs"]
 mod navigation;
 #[cfg(any(test, feature = "ai-bench"))]
@@ -21,6 +24,10 @@ const MINING_RATE: f32 = 25.0;
 const STARTING_CREDITS: f32 = 500.0;
 const PASSIVE_INCOME: f32 = 24.0;
 const CREDIT_CAP: f32 = 2000.0;
+const EMPLACEMENT_COST: f32 = 200.0;
+const EMPLACEMENT_BUILD_TIME: f32 = 8.0;
+const EMPLACEMENT_HEALTH: f32 = 320.0;
+const EMPLACEMENT_RANGE: f32 = 16.0;
 // A costly, fragile breaching tool: lethal to clustered infantry, but a tank
 // survives a blast beyond close range and no full-health structure is one-shot.
 const DEMOLITION_RADIUS: f32 = 7.0;
@@ -185,6 +192,15 @@ pub enum BuildingKind {
     Barracks,
     Factory,
     Refinery,
+    Emplacement,
+}
+
+#[derive(Clone, Copy, Serialize)]
+pub struct DefenseSlot {
+    pub team: Team,
+    pub slot: usize,
+    pub x: f32,
+    pub z: f32,
 }
 
 #[derive(Clone, Serialize)]
@@ -236,6 +252,9 @@ pub struct Building {
     pub z: f32,
     pub hp: f32,
     pub max_hp: f32,
+    pub defense_slot: Option<usize>,
+    pub construction_remaining: f32,
+    pub facing: f32,
     #[serde(skip)]
     cooldown: f32,
 }
@@ -290,6 +309,7 @@ pub struct Game {
     pub outcome: Outcome,
     pub units: Vec<Unit>,
     pub buildings: Vec<Building>,
+    pub defense_slots: Vec<DefenseSlot>,
     pub ore: Vec<OreDeposit>,
     pub barracks_queue: Vec<UnitKind>,
     pub factory_queue: Vec<UnitKind>,
@@ -371,6 +391,20 @@ impl Game {
             outcome: Outcome::Playing,
             units: Vec::new(),
             buildings: Vec::new(),
+            defense_slots: [Team::Player, Team::Enemy]
+                .into_iter()
+                .flat_map(|team| {
+                    [-7.0, 7.0]
+                        .into_iter()
+                        .enumerate()
+                        .map(move |(slot, x)| DefenseSlot {
+                            team,
+                            slot,
+                            x,
+                            z: if team == Team::Player { 34.0 } else { -34.0 },
+                        })
+                })
+                .collect(),
             ore: Vec::new(),
             barracks_queue: vec![],
             factory_queue: vec![],
@@ -464,9 +498,64 @@ impl Game {
             z,
             hp,
             max_hp: hp,
+            defense_slot: None,
+            construction_remaining: 0.0,
+            facing: if team == Team::Player {
+                0.0
+            } else {
+                std::f32::consts::PI
+            },
             cooldown: 0.0,
         });
     }
+    /// Fixed pads are terrain, not targets. A purchased gun is a normal,
+    /// destructible structure from the moment construction starts.
+    pub fn build_emplacement(&mut self, slot: usize) {
+        if !self.demo {
+            self.build_emplacement_for(Team::Player, slot);
+        }
+    }
+
+    fn build_emplacement_for(&mut self, team: Team, slot: usize) -> bool {
+        if self.outcome != Outcome::Playing
+            || !self.alive_building(team, BuildingKind::Command)
+            || self
+                .buildings
+                .iter()
+                .any(|b| b.team == team && b.hp > 0.0 && b.defense_slot == Some(slot))
+        {
+            return false;
+        }
+        let Some(pad) = self
+            .defense_slots
+            .iter()
+            .find(|p| p.team == team && p.slot == slot)
+            .copied()
+        else {
+            return false;
+        };
+        let credits = if team == Team::Player {
+            &mut self.credits
+        } else {
+            &mut self.ai_credits
+        };
+        if *credits < EMPLACEMENT_COST {
+            return false;
+        }
+        *credits -= EMPLACEMENT_COST;
+        self.add_building(
+            team,
+            BuildingKind::Emplacement,
+            pad.x,
+            pad.z,
+            EMPLACEMENT_HEALTH,
+        );
+        let gun = self.buildings.last_mut().unwrap();
+        gun.defense_slot = Some(slot);
+        gun.construction_remaining = EMPLACEMENT_BUILD_TIME;
+        true
+    }
+
     fn spawn(&mut self, team: Team, kind: UnitKind) {
         if kind == UnitKind::Demolition && self.has_demolition(team) {
             return;
@@ -814,6 +903,9 @@ impl Game {
     }
 
     fn ai_medium(&mut self, team: Team) {
+        if self.prepare_emplacement(team) {
+            return;
+        }
         let opponent = if team == Team::Enemy {
             Team::Player
         } else {
@@ -1257,7 +1349,13 @@ impl Game {
                     unit_damage[j] += unit.kind.damage(Some(snapshot[j].kind));
                 } else {
                     let (j, _) = target_building.unwrap();
-                    building_damage[j] += unit.kind.damage(None);
+                    building_damage[j] += if buildings[j].kind == BuildingKind::Emplacement
+                        && unit.kind == UnitKind::Soldier
+                    {
+                        24.0
+                    } else {
+                        unit.kind.damage(None)
+                    };
                 }
                 let (target_x, target_y, target_z) = if let Some(j) = firing_target {
                     (snapshot[j].x, 1.1, snapshot[j].z)
@@ -1312,6 +1410,52 @@ impl Game {
         // Command centers provide short-range point defense to prevent runaway snowballs.
         for b in &mut self.buildings {
             b.cooldown = (b.cooldown - dt).max(0.0);
+            if b.kind == BuildingKind::Emplacement {
+                if b.construction_remaining > 0.0 {
+                    b.construction_remaining = (b.construction_remaining - dt).max(0.0);
+                    continue;
+                }
+                // Prefer armor; rotate at a bounded speed so close infantry can
+                // overwhelm an unsupported gun. Never target hidden garrisons.
+                if let Some((j, target)) = snapshot
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, u)| {
+                        u.team != b.team
+                            && u.on_field()
+                            && distance_sq(b.x, b.z, u.x, u.z) <= EMPLACEMENT_RANGE.powi(2)
+                    })
+                    .max_by(|(_, a), (_, c)| {
+                        let score = |u: &Unit| {
+                            emplacement_damage(u.kind) * 100.0 - distance_sq(b.x, b.z, u.x, u.z)
+                        };
+                        score(a).total_cmp(&score(c))
+                    })
+                {
+                    let desired = (b.x - target.x).atan2(b.z - target.z);
+                    let delta = angle_delta(desired, b.facing);
+                    b.facing += delta.clamp(-dt, dt);
+                    if angle_delta(desired, b.facing).abs() <= 0.12 && b.cooldown <= 0.0 {
+                        unit_damage[j] += emplacement_damage(target.kind);
+                        self.shots.push(CombatShot {
+                            id: self.next_shot_id,
+                            time: self.time,
+                            source_id: b.id,
+                            source_is_unit: false,
+                            kind: UnitKind::Tank,
+                            source_y: 1.8,
+                            target_y: 1.1,
+                            x: b.x,
+                            z: b.z,
+                            target_x: target.x,
+                            target_z: target.z,
+                        });
+                        self.next_shot_id += 1;
+                        b.cooldown = 2.2;
+                    }
+                }
+                continue;
+            }
             if b.kind == BuildingKind::Command && b.cooldown <= 0.0 {
                 if let Some((j, _)) = snapshot
                     .iter()
@@ -1453,7 +1597,21 @@ fn building_half_size(kind: BuildingKind) -> (f32, f32) {
         BuildingKind::Barracks => (2.85, 2.65),
         BuildingKind::Factory => (3.225, 3.05),
         BuildingKind::Refinery => (3.55, 2.8),
+        BuildingKind::Emplacement => (1.7, 1.7),
     }
+}
+
+fn emplacement_damage(kind: UnitKind) -> f32 {
+    match kind {
+        UnitKind::Tank => 100.0,
+        UnitKind::Collector | UnitKind::Demolition => 50.0,
+        UnitKind::Soldier | UnitKind::Rocket => 8.0,
+    }
+}
+
+fn angle_delta(target: f32, facing: f32) -> f32 {
+    (target - facing + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+        - std::f32::consts::PI
 }
 
 fn unit_index(kind: UnitKind) -> usize {

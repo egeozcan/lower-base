@@ -18,6 +18,7 @@ try {
     while (report.commands[nextCommand]?.tick === tick) {
       const { action, args } = report.commands[nextCommand++];
       if (action === 'train') game.train(args.kind);
+      else if (action === 'build_emplacement') game.build_emplacement(args.slot);
       else if (action === 'cancel_training') game.cancel_training(args.building, args.index);
       else if (action === 'eject_garrisoned') game.eject_garrisoned(args.id);
       else if (action === 'set_mode') game.set_mode(args.mode);
