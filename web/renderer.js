@@ -366,12 +366,14 @@ function unitMesh(u) {
 
   // Combine the small armor pieces by material. Detailed models stay cheap to
   // draw even when both armies have many units on screen.
-  const parts = new Map();
+  // Parts go to the hull unless a turret is being assembled around its pivot.
+  const hull = new Map(), turret = new Map(), pivotZ = -.1;
+  let parts = hull;
   const addPart = (geometry, material, x, y, z, rx = 0, ry = 0, rz = 0) => {
     const source = geometry.index ? geometry.toNonIndexed() : geometry;
     if (source !== geometry) geometry.dispose();
     source.applyMatrix4(new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(rx, ry, rz)));
-    source.translate(x, y, z);
+    source.translate(x, y, parts === turret ? z - pivotZ : z);
     if (!parts.has(material)) parts.set(material, []);
     parts.get(material).push(source);
   };
@@ -432,16 +434,27 @@ function unitMesh(u) {
     plate(1.7, .08, .75, 0, 1.26, .95, shadow);
     for (let x = -.65; x <= .65; x += .22) plate(.07, .08, .68, x, 1.32, .95, metal);
     drum(.72, .9, .26, 0, 1.3, -.08, shadow);
+    for (const x of [-.7, .7]) plate(.2, .13, .08, x, 1.15, -1.45, lamp);
+    // The turret traverses independently: hull follows the route, gun the target.
+    parts = turret;
     drum(.83, 1, .55, 0, 1.66, -.1, glow, 0, Math.PI / 8, 0, 8);
     plate(1.22, .16, 1.15, 0, 1.98, -.1, armor);
+    plate(1.05, .4, .55, 0, 1.68, .82, armor);
+    plate(1.1, .08, .6, 0, 1.92, .82, shadow);
+    for (const x of [-.62, .62]) {
+      plate(.2, .28, .5, x, 1.66, .8, dark);
+      for (const z of [-.62, -.42]) drum(.065, .065, .26, x * 1.05, 1.86, z, shadow, Math.PI / 2.6, 0, 0, 6);
+    }
     drum(.28, .28, .13, -.3, 2.1, .05, shadow);
+    drum(.2, .24, .08, -.3, 2.2, .05, metal);
     plate(.55, .4, .4, 0, 1.68, -.95, armor);
     drum(.105, .14, 1.95, 0, 1.7, -1.97, metal, Math.PI / 2);
+    drum(.15, .15, .4, 0, 1.7, -1.75, shadow, Math.PI / 2);
     drum(.17, .17, .28, 0, 1.7, -2.95, shadow, Math.PI / 2);
     drum(.025, .025, 1.1, .55, 2.45, .35, shadow);
-    for (const x of [-.7, .7]) plate(.2, .13, .08, x, 1.15, -1.45, lamp);
     plate(.16, .025, .52, .25, 2.08, -.28, mat(0xe6dfbe));
     plate(.48, .025, .16, .25, 2.09, -.28, mat(0xe6dfbe));
+    parts = hull;
   } else {
     // Cloth fatigues, field webbing and a broad steel helmet.
     for (const x of [-.23, .23]) {
@@ -474,25 +487,76 @@ function unitMesh(u) {
       plate(.12, .27, .18, .4, .88, -.4, metal, -.25);
     }
   }
-  for (const [material, geometries] of parts) {
-    const positions = [], normals = [];
-    for (const geometry of geometries) {
-      positions.push(...geometry.attributes.position.array);
-      normals.push(...geometry.attributes.normal.array);
-      geometry.dispose();
+  const merge = (source, parent) => {
+    for (const [material, geometries] of source) {
+      const positions = [], normals = [];
+      for (const geometry of geometries) {
+        positions.push(...geometry.attributes.position.array);
+        normals.push(...geometry.attributes.normal.array);
+        geometry.dispose();
+      }
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+      geometry.computeBoundingSphere();
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.castShadow = true; mesh.receiveShadow = true; parent.add(mesh);
     }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
-    geometry.computeBoundingSphere();
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.castShadow = true; mesh.receiveShadow = true; g.add(mesh);
+  };
+  merge(hull, g);
+  if (turret.size) {
+    const pivot = new THREE.Group(); pivot.position.z = pivotZ;
+    merge(turret, pivot); g.add(pivot); g.userData.turret = pivot;
   }
+  // Yaw last, so walking lean and suspension pitch follow the unit's heading.
+  g.rotation.order = 'YXZ';
   const shadowSize = {collector: [3.6, 4.8], demolition: [3, 4.6], tank: [3.3, 4.2]}[u.kind] || [1.5, 1.3];
   g.add(contactShadow(...shadowSize));
   // Models face north by default. The opposing force faces south.
   if (u.team === 'enemy') g.rotation.y = Math.PI;
   return g;
+}
+const VEHICLES = new Set(['tank', 'collector', 'demolition']);
+const TURN_RATE = {tank: 2.6, collector: 3.2, demolition: 3.6};
+const wrapAngle = angle => Math.atan2(Math.sin(angle), Math.cos(angle));
+const turnToward = (current, target, step) => current + Math.max(-step, Math.min(step, wrapAngle(target - current)));
+// Units turn into their route, face targets while firing, and move with a
+// gait: infantry bob and sway, vehicles ride their suspension and raise dust.
+function animateUnit(entity, item, dt, now, effects, compact) {
+  const model = entity.group.children[0], turret = model.userData.turret;
+  const dx = item.x - entity.group.position.x, dz = item.z - entity.group.position.z;
+  const step = Math.hypot(dx, dz), continuous = entity.placed && step < 3;
+  entity.placed = true;
+  const speed = continuous && dt > 0 ? step / dt : 0;
+  entity.speed += (speed - entity.speed) * Math.min(1, dt * 10);
+  if (continuous && step > .002) entity.heading = Math.atan2(-dx, -dz);
+  const aiming = now < entity.aimUntil;
+  const desired = aiming && !turret ? entity.aimYaw : entity.heading;
+  if (desired !== undefined) model.rotation.y = turnToward(model.rotation.y, desired, (TURN_RATE[item.kind] || 9) * dt);
+  if (turret) {
+    turret.rotation.y = turnToward(turret.rotation.y, aiming ? wrapAngle(entity.aimYaw - model.rotation.y) : 0, 4.5 * dt);
+    const recoil = Math.max(0, (entity.recoilUntil - now) / 240) * .35;
+    turret.position.x = Math.sin(turret.rotation.y) * recoil;
+    turret.position.z = -.1 + Math.cos(turret.rotation.y) * recoil;
+  }
+  const vehicle = VEHICLES.has(item.kind), amount = Math.min(1, entity.speed / 2);
+  entity.gait += dt * entity.speed * (vehicle ? 1.6 : 3.4);
+  if (vehicle) {
+    model.position.y = Math.sin(entity.gait * 2.3) * .035 * amount;
+    model.rotation.x = Math.sin(entity.gait * 1.7) * .015 * amount;
+    entity.dust += dt * amount;
+    if (entity.dust > (compact ? .2 : .1) && entity.group.visible) {
+      entity.dust = 0;
+      const back = item.kind === 'tank' ? 1.5 : 1.9, yaw = model.rotation.y;
+      effects.emit('dust', { x: item.x + Math.sin(yaw) * back, y: .25, z: item.z + Math.cos(yaw) * back },
+        { size: .8 + Math.random() * .5, life: .7 + Math.random() * .4, vx: (Math.random() - .5) * .6,
+          vy: .35, vz: (Math.random() - .5) * .6, color: 0xa1977a });
+    }
+  } else {
+    model.position.y = Math.abs(Math.sin(entity.gait)) * .13 * amount;
+    model.rotation.z = Math.sin(entity.gait) * .07 * amount;
+    model.rotation.x = -.1 * amount;
+  }
 }
 function healthBar(width) {
   const g = new THREE.Group();
@@ -535,7 +599,7 @@ export class BattlefieldRenderer {
     this.camera = new THREE.OrthographicCamera(-25, 25, 45, -45, .1, 300);
     this.camera.position.set(0, 110, 95); this.camera.lookAt(0, 0, 0);
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
-    const compact = window.matchMedia('(max-width: 700px)').matches;
+    const compact = this.compact = window.matchMedia('(max-width: 700px)').matches;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, compact ? 1.5 : 2));
     this.renderer.shadowMap.enabled = true; this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -669,16 +733,14 @@ export class BattlefieldRenderer {
         }
         const selection = ring(isUnit && ['tank', 'demolition'].includes(item.kind) ? 1.8 : 1.25, 0x9eff40, .95); selection.visible = false; group.add(selection);
         const hp = healthBar(isUnit ? 1.8 : 4.5); hp.position.y = isUnit ? (item.kind === 'tank' ? 2.3 : 2.5) : (item.kind === 'command' ? 6.8 : 5.1); group.add(hp);
-        this.scene.add(group); entity = {group, selection, hp, hitTarget, cargo, kind: item.kind, isUnit, selectable: false, recoilUntil: 0, emission: 0}; this.entities.set(key, entity);
+        this.scene.add(group); entity = {group, selection, hp, hitTarget, cargo, kind: item.kind, isUnit, selectable: false, recoilUntil: 0, emission: 0,
+          placed: false, speed: 0, gait: 0, dust: 0, heading: undefined, aimYaw: 0, aimUntil: 0}; this.entities.set(key, entity);
       }
-      if (entity.cargo || item.kind === 'demolition') {
-        const dx = item.x - entity.group.position.x, dz = item.z - entity.group.position.z;
-        if (Math.hypot(dx, dz) > .001) entity.group.children[0].rotation.y = Math.atan2(-dx, -dz);
-        if (entity.cargo) {
-          entity.cargo.visible = item.cargo > 0;
-          entity.cargo.scale.y = item.cargo / 100;
-        }
+      if (entity.cargo) {
+        entity.cargo.visible = item.cargo > 0;
+        entity.cargo.scale.y = item.cargo / 100;
       }
+      if (isUnit) animateUnit(entity, item, dt, now, this.combatEffects, this.compact);
       entity.group.position.set(item.x, 0, item.z);
       entity.group.visible = item.state !== 'garrison';
       if (item.kind === 'emplacement') {
@@ -686,12 +748,6 @@ export class BattlefieldRenderer {
         model.rotation.y = item.facing;
         model.scale.y = .25 + .75 * (1 - item.construction_remaining / 8);
         entity.hp.position.y = 3;
-      }
-      if (entity.kind === 'tank') {
-        const recoil = Math.max(0, (entity.recoilUntil - performance.now()) / 240);
-        const model = entity.group.children[0];
-        model.position.x = Math.sin(model.rotation.y) * recoil * .4;
-        model.position.z = Math.cos(model.rotation.y) * recoil * .4;
       }
       entity.selectable = isUnit && item.team === 'player' && item.state === 'gather';
       entity.selection.visible = entity.selectable && selected.has(item.id);
@@ -715,7 +771,8 @@ export class BattlefieldRenderer {
       this.lastShotId = shot.id;
       const entity = this.entities.get(`${shot.source_is_unit ? 'u' : 'b'}${shot.source_id}`);
       if (entity && shot.source_is_unit) {
-        entity.group.children[0].rotation.y = Math.atan2(shot.x - shot.target_x, shot.z - shot.target_z);
+        entity.aimYaw = Math.atan2(shot.x - shot.target_x, shot.z - shot.target_z);
+        entity.aimUntil = now + (shot.kind === 'tank' ? 2600 : 1400);
         if (shot.kind === 'tank') entity.recoilUntil = now + 240;
       }
       this.combatEffects.fire(shot);
