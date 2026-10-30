@@ -26,48 +26,186 @@ function ring(radius, color, opacity = 1) {
   const m = new THREE.Mesh(new THREE.RingGeometry(radius - 0.08, radius, 32), new THREE.MeshBasicMaterial({color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false}));
   m.rotation.x = -Math.PI / 2; m.position.y = 0.08; return m;
 }
-function addEnvironment(scene) {
-  // A sunlit temperate battlefield: scrub, worn asphalt and concrete aprons.
-  box(scene, 100, .6, 150, 0, -.5, 0, mat(0x646c3d));
-  let seed = 1941;
-  const random = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
-  for (let i = 0; i < 260; i++) {
-    const x = random() * 94 - 47, z = random() * 142 - 71;
-    const shape = new THREE.Shape();
-    for (let point = 0; point < 9; point++) {
-      const angle = point / 8 * Math.PI * 2;
-      const radius = 1 + random() * 1.8;
-      const px = Math.cos(angle) * radius, py = Math.sin(angle) * radius;
-      if (point === 0) shape.moveTo(px, py); else shape.lineTo(px, py);
-    }
-    shape.closePath();
-    const patch = new THREE.Mesh(new THREE.ShapeGeometry(shape), mat([0x6d7443, 0x606c3c, 0x77794a, 0x626d40][i % 4]));
-    patch.rotation.x = -Math.PI / 2; patch.position.set(x, -.17, z);
-    patch.receiveShadow = true; scene.add(patch);
+// Surfaces are painted once into canvases with a fixed seed, so every match
+// sees the same ground while costing only a handful of textured draws.
+function seeded(seed) {
+  return () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
+}
+function paintedTexture(width, height, paint) {
+  const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
+  paint(canvas.getContext('2d'), width, height);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace; texture.anisotropy = 4;
+  return texture;
+}
+function speckle(ctx, width, height, count, random, light, dark, size = 1) {
+  for (let i = 0; i < count; i++) {
+    ctx.fillStyle = random() < .5 ? light : dark;
+    ctx.fillRect(random() * width, random() * height, size, size);
   }
-  box(scene, 9, .08, 110, 0, -.1, 0, mat(0x62615a));
+}
+function blotch(ctx, x, y, radius, color, alpha) {
+  const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+  gradient.addColorStop(0, `rgba(${color},${alpha})`); gradient.addColorStop(1, `rgba(${color},0)`);
+  ctx.fillStyle = gradient; ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+}
+function groundTexture(scale) {
+  // Canvas x follows world x and canvas y follows world z across the 100×150 field.
+  return paintedTexture(100 * scale, 150 * scale, (ctx, w, h) => {
+    const random = seeded(1941), px = x => (x + 50) * scale, pz = z => (z + 75) * scale;
+    ctx.fillStyle = '#646c3d'; ctx.fillRect(0, 0, w, h);
+    const tones = ['123,130,74', '86,98,52', '139,134,82', '96,90,58', '74,88,46'];
+    for (let i = 0; i < 700; i++) blotch(ctx, random() * w, random() * h, (2 + random() * 7) * scale, tones[i % tones.length], .18 + random() * .22);
+    // Worn earth around both bases and along the road shoulders.
+    for (const side of [-1, 1]) {
+      for (let i = 0; i < 70; i++) blotch(ctx, px((random() - .5) * 46), pz(side * (42 + (random() - .5) * 26)), (2 + random() * 4) * scale, '118,100,66', .22);
+    }
+    for (let z = -56; z <= 56; z += 1.5) for (const side of [-1, 1]) {
+      blotch(ctx, px(side * (5 + random() * 1.6)), pz(z), (1 + random() * 1.4) * scale, '104,90,60', .35);
+    }
+    // Faint vehicle tracks wander across the contested middle.
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 12; i++) {
+      let x = (random() - .5) * 30, z = -32;
+      ctx.strokeStyle = `rgba(70,62,40,${.12 + random() * .1})`; ctx.lineWidth = .28 * scale;
+      for (const offset of [-.7, .7]) {
+        ctx.beginPath(); ctx.moveTo(px(x + offset), pz(z));
+        let tx = x, tz = z;
+        while (tz < 32) { tz += 4; tx += (random() - .5) * 3; ctx.lineTo(px(tx + offset), pz(tz)); }
+        ctx.stroke();
+      }
+    }
+    speckle(ctx, w, h, w * h / 18, random, 'rgba(176,180,112,.22)', 'rgba(40,46,24,.25)', Math.max(1, scale / 6));
+  });
+}
+function asphaltTexture() {
+  const texture = paintedTexture(128, 256, (ctx, w, h) => {
+    const random = seeded(77);
+    ctx.fillStyle = '#5f5e58'; ctx.fillRect(0, 0, w, h);
+    for (let i = 0; i < 18; i++) {
+      ctx.fillStyle = `rgba(${random() < .5 ? '40,40,38' : '120,118,108'},${.06 + random() * .08})`;
+      ctx.fillRect(random() * w, random() * h, 10 + random() * 40, 10 + random() * 50);
+    }
+    speckle(ctx, w, h, 9000, random, 'rgba(160,158,145,.35)', 'rgba(30,30,28,.35)');
+    ctx.strokeStyle = 'rgba(32,32,30,.55)'; ctx.lineWidth = 1;
+    for (let i = 0; i < 7; i++) {
+      let x = random() * w, y = random() * h; ctx.beginPath(); ctx.moveTo(x, y);
+      for (let j = 0; j < 6; j++) { x += (random() - .5) * 18; y += random() * 12; ctx.lineTo(x, y); }
+      ctx.stroke();
+    }
+    // Darker edges where the asphalt meets the verge.
+    const edge = ctx.createLinearGradient(0, 0, w, 0);
+    edge.addColorStop(0, 'rgba(40,38,30,.5)'); edge.addColorStop(.12, 'rgba(40,38,30,0)');
+    edge.addColorStop(.88, 'rgba(40,38,30,0)'); edge.addColorStop(1, 'rgba(40,38,30,.5)');
+    ctx.fillStyle = edge; ctx.fillRect(0, 0, w, h);
+  });
+  texture.wrapT = THREE.RepeatWrapping; texture.repeat.set(1, 14);
+  return texture;
+}
+function apronTexture(scale) {
+  return paintedTexture(37 * scale, 19 * scale, (ctx, w, h) => {
+    const random = seeded(311);
+    ctx.fillStyle = '#939282'; ctx.fillRect(0, 0, w, h);
+    // Individual slabs are poured at slightly different shades.
+    for (let x = -18.5; x < 18.5; x += 3) for (let z = -9.5; z < 9.5; z += 3) {
+      ctx.fillStyle = `rgba(${random() < .5 ? '170,168,150' : '110,108,96'},${random() * .16})`;
+      ctx.fillRect((x + 18.5) * scale, (z + 9.5) * scale, 3 * scale, 3 * scale);
+    }
+    for (let i = 0; i < 26; i++) blotch(ctx, random() * w, random() * h, (.4 + random() * 1.6) * scale, '52,50,42', .18 + random() * .2);
+    speckle(ctx, w, h, w * h / 6, random, 'rgba(200,198,182,.25)', 'rgba(70,70,60,.25)');
+    ctx.strokeStyle = 'rgba(84,84,72,.85)'; ctx.lineWidth = Math.max(1, scale * .07);
+    for (let x = .5; x < 37; x += 3) { ctx.beginPath(); ctx.moveTo(x * scale, 0); ctx.lineTo(x * scale, h); ctx.stroke(); }
+    for (let z = 1.5; z < 19; z += 3) { ctx.beginPath(); ctx.moveTo(0, z * scale); ctx.lineTo(w, z * scale); ctx.stroke(); }
+    ctx.strokeStyle = 'rgba(60,58,50,.6)'; ctx.lineWidth = 2;
+    ctx.strokeRect(1, 1, w - 2, h - 2);
+  });
+}
+let blobTexture = null;
+function contactShadowMaterial() {
+  // Soft ambient occlusion under every model grounds it on the battlefield.
+  if (!mats.has('contact-shadow')) {
+    blobTexture = paintedTexture(64, 64, ctx => blotch(ctx, 32, 32, 32, '255,255,255', 1));
+    mats.set('contact-shadow', new THREE.MeshBasicMaterial({map: blobTexture, color: 0x000000, transparent: true, opacity: .55, depthWrite: false}));
+  }
+  return mats.get('contact-shadow');
+}
+function contactShadow(width, depth) {
+  // Per-model material: wreck cleanup disposes decorations. Clones share one program.
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), contactShadowMaterial().clone());
+  m.rotation.x = -Math.PI / 2; m.position.y = .06; m.renderOrder = -1;
+  m.userData.decoration = true;
+  return m;
+}
+function texturedPlane(scene, w, d, x, y, z, map, roughness = .95) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshStandardMaterial({map, roughness, metalness: 0}));
+  m.rotation.x = -Math.PI / 2; m.position.set(x, y, z); m.receiveShadow = true; scene.add(m); return m;
+}
+function scatter(scene, geometry, material, count, place, castShadow = false) {
+  const mesh = new THREE.InstancedMesh(geometry, material, count);
+  const transform = new THREE.Object3D(), color = new THREE.Color();
+  let placed = 0;
+  for (let i = 0; i < count; i++) if (place(transform, color, i)) {
+    transform.updateMatrix(); mesh.setMatrixAt(placed, transform.matrix); mesh.setColorAt(placed++, color);
+  }
+  mesh.count = placed; mesh.castShadow = castShadow; mesh.receiveShadow = true;
+  scene.add(mesh); return mesh;
+}
+function addEnvironment(scene, compact) {
+  // A sunlit temperate battlefield: scrub, worn asphalt and concrete aprons.
+  box(scene, 100, .6, 150, 0, -.5, 0, mat(0x5a6236));
+  texturedPlane(scene, 100, 150, 0, -.195, 0, groundTexture(compact ? 6 : 10));
+  texturedPlane(scene, 9, 110, 0, -.055, 0, asphaltTexture(), .9);
   for (let z = -50; z <= 50; z += 5) {
     box(scene, .15, .025, 2, 0, -.04, z, mat(0xc6b785));
     for (const x of [-4.2, 4.2]) box(scene, .12, .025, 4.8, x, -.04, z, mat(0xaaa68b));
   }
+  const apron = apronTexture(compact ? 12 : 20);
   for (const side of [-1, 1]) {
-    box(scene, 37, .15, 19, 0, -.04, side * 42, mat(0x919080));
-    for (let x = -18; x <= 18; x += 3) {
-      box(scene, .045, .02, 18.8, x, .045, side * 42, mat(0x6c6c60));
-      box(scene, 1.5, .03, .45, x, .05, side * 32.8, mat(0xcbb457), -.45);
-    }
-    for (let z = 34; z < 51; z += 3) box(scene, 37, .02, .045, 0, .045, side * z, mat(0x6c6c60));
+    box(scene, 37, .15, 19, 0, -.04, side * 42, mat(0x7c7b6c));
+    const slab = texturedPlane(scene, 37, 19, 0, .036, side * 42, apron);
+    if (side < 0) slab.rotation.z = Math.PI;
+    for (let x = -18; x <= 18; x += 3) box(scene, 1.5, .03, .45, x, .05, side * 32.8, mat(0xcbb457), -.45);
   }
+  const random = seeded(1941);
+  const outside = (x, z) => Math.abs(x) > 21 || Math.abs(z) > 54;
+  // Forest edges: two instanced canopy tiers, trunks and outcrops in four draws.
+  const trees = [];
+  for (let i = 0; i < 420 && trees.length < 150; i++) {
+    const x = (random() < .5 ? -1 : 1) * (22 + random() * 26), z = random() * 146 - 73;
+    if (trees.every(t => Math.hypot(t.x - x, t.z - z) > 3.2)) trees.push({x, z, s: .75 + random() * .6, h: random()});
+  }
+  const treeAt = (lift, tint) => (transform, color, i) => {
+    const t = trees[i];
+    transform.position.set(t.x, lift * t.s, t.z); transform.rotation.set(0, t.h * 6, 0); transform.scale.setScalar(t.s);
+    color.setHSL(.24 + t.h * .06, .4 + t.h * .12, tint + t.h * .04);
+    return true;
+  };
+  const foliage = new THREE.MeshStandardMaterial({color: 0xffffff, roughness: .9, flatShading: true});
+  scatter(scene, new THREE.CylinderGeometry(.18, .3, 1.6, 5), mat(0x554631), trees.length, (transform, color, i) => {
+    const t = trees[i];
+    color.set(0xffffff); transform.position.set(t.x, .6 * t.s, t.z); transform.scale.setScalar(t.s); return true;
+  }, true);
+  scatter(scene, new THREE.ConeGeometry(1.75, 3.7, 7), foliage, trees.length, treeAt(2.7, .1), true);
+  scatter(scene, new THREE.ConeGeometry(1.25, 2.8, 7), foliage, trees.length, treeAt(4.1, .14), true);
+  const stone = new THREE.MeshStandardMaterial({color: 0xffffff, roughness: .95, flatShading: true});
+  scatter(scene, new THREE.DodecahedronGeometry(1), stone, 70, (transform, color) => {
+    const x = (random() < .5 ? -1 : 1) * (20.5 + random() * 28), z = random() * 146 - 73;
+    const size = .5 + random() * 1.1;
+    transform.position.set(x, .05, z); transform.rotation.set(random(), random() * 6, random());
+    transform.scale.set(size * (1 + random() * .5), size * .55, size);
+    color.setHSL(.12, .08, .42 + random() * .12); return true;
+  }, true);
+  // Low grass tufts break up the ground plane without adding shadow cost.
+  scatter(scene, new THREE.ConeGeometry(.22, .55, 4), foliage, compact ? 700 : 1500, (transform, color) => {
+    const x = random() * 96 - 48, z = random() * 146 - 73;
+    const onRoad = Math.abs(x) < 6 && Math.abs(z) < 56, onApron = Math.abs(x) < 19.5 && Math.abs(z) > 32 && Math.abs(z) < 52;
+    if (onRoad || onApron || Math.abs(Math.abs(x) - 18.8) < .8 || (!outside(x, z) && random() < .55)) return false;
+    const size = .6 + random() * .9;
+    transform.position.set(x, -.2 + .27 * size, z); transform.rotation.set((random() - .5) * .4, random() * 6, (random() - .5) * .4);
+    transform.scale.set(size, size, size);
+    color.setHSL(.16 + random() * .07, .45, .13 + random() * .07); return true;
+  });
   for (const side of [-1, 1]) {
-    for (let z = -49; z < 52; z += 7) {
-      const x = side * (23 + random() * 7);
-      // Low polygon conifers and rock outcrops sit outside the playable lane.
-      cylinder(scene, .18, .3, 1.6, x, .6, z, mat(0x554631), 5);
-      cylinder(scene, 0, 1.65, 3.7, x, 2.7, z, mat(0x354b29), 7);
-      cylinder(scene, 0, 1.2, 2.8, x, 4, z, mat(0x445b30), 7);
-      const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(.7 + random()), mat(0x898574));
-      rock.position.set(x + side * 2, .2, z + 2); rock.scale.y = .6; rock.castShadow = true; scene.add(rock);
-    }
     for (let z = -29; z <= 29; z += 6) {
       box(scene, .55, .7, 3.8, side * 18.8, .25, z, mat(0xaaa28a));
       box(scene, .65, .12, 3.9, side * 18.8, .66, z, mat(0xc0b89e));
@@ -83,7 +221,7 @@ function buildingMesh(b) {
   g.add(body);
   const accent = b.team === 'player' ? C.player : C.enemy;
   const darkAccent = b.team === 'player' ? C.playerDark : C.enemyDark;
-  const glow = mat(accent), armor = mat(b.team === 'player' ? 0xb3b09a : 0x9b9380), dark = mat(C.dark), edge = mat(darkAccent);
+  const glow = mat(accent, accent, .35), armor = mat(b.team === 'player' ? 0xb3b09a : 0x9b9380), dark = mat(C.dark), edge = mat(darkAccent);
   const steel = mat(0x999b8d), shadow = mat(0x4c5146), caution = mat(0xe1bd49);
   if (b.kind === 'emplacement') {
     body.rotation.y = 0;
@@ -213,6 +351,8 @@ function buildingMesh(b) {
     const mesh = new THREE.Mesh(geometry, material);
     mesh.castShadow = true; mesh.receiveShadow = true; body.add(mesh);
   }
+  const footprint = {command: [9.4, 8.6], refinery: [9.2, 7.6], factory: [8.4, 8], emplacement: [4.6, 4.6]}[b.kind] || [7.6, 7.2];
+  g.add(contactShadow(...footprint));
   const baseRing = ring(b.kind === 'command' ? 4.3 : 3.5, accent, .3); baseRing.userData.decoration = true; g.add(baseRing);
   return g;
 }
@@ -220,7 +360,8 @@ function unitMesh(u) {
   const g = new THREE.Group();
   const accent = u.team === 'player' ? C.player : C.enemy;
   const darkAccent = u.team === 'player' ? C.playerDark : C.enemyDark;
-  const glow = mat(accent), armor = mat(u.team === 'player' ? 0x8b9563 : 0xa09166), dark = mat(0x464c36);
+  const glow = mat(accent, accent, .25), armor = mat(u.team === 'player' ? 0x8b9563 : 0xa09166), dark = mat(0x464c36);
+  const lamp = mat(0xffde8b, 0xffc861, 1.4);
   const metal = mat(0x858777), pale = mat(0xd2ac7e), shadow = mat(0x292c25);
 
   // Combine the small armor pieces by material. Detailed models stay cheap to
@@ -254,7 +395,7 @@ function unitMesh(u) {
     plate(1.5, .45, .1, 0, 1.7, -1.7, mat(0x97b9bf));
     plate(2.1, .15, 1.4, 0, 2.1, -1.05, armor);
     plate(2.7, .45, .65, 0, .45, -2.05, mat(0xd4ae45));
-    for (const x of [-.85, .85]) plate(.25, .2, .12, x, 1.15, -1.7, mat(0xffde8b));
+    for (const x of [-.85, .85]) plate(.25, .2, .12, x, 1.15, -1.7, lamp);
   } else if (u.kind === 'demolition') {
     // Six wheels, a faction-painted cab, and an unmistakable hazard-striped charge.
     const explosive = mat(0xac4930), warning = mat(0xf0cc51);
@@ -272,8 +413,8 @@ function unitMesh(u) {
       for (const z of [-.05, .55, 1.15]) plate(.07, .57, .22, x, 1.5, z, shadow, -.5);
     }
     plate(1.85, .12, 2.15, 0, 2.25, .65, dark);
-    drum(.18, .18, .2, 0, 2.42, .45, mat(0xff6b28));
-    for (const x of [-.65, .65]) plate(.25, .18, .08, x, 1.05, -1.72, mat(0xffde8b));
+    drum(.18, .18, .2, 0, 2.42, .45, mat(0xff6b28, 0xff4a10, 1.2));
+    for (const x of [-.65, .65]) plate(.25, .18, .08, x, 1.05, -1.72, lamp);
   } else if (u.kind === 'tank') {
     // Squat riveted armor, exposed treads and a long conventional cannon.
     plate(2.2, .5, 3.05, 0, .48, .1, shadow);
@@ -298,7 +439,7 @@ function unitMesh(u) {
     drum(.105, .14, 1.95, 0, 1.7, -1.97, metal, Math.PI / 2);
     drum(.17, .17, .28, 0, 1.7, -2.95, shadow, Math.PI / 2);
     drum(.025, .025, 1.1, .55, 2.45, .35, shadow);
-    for (const x of [-.7, .7]) plate(.2, .13, .08, x, 1.15, -1.45, mat(0xf6d889));
+    for (const x of [-.7, .7]) plate(.2, .13, .08, x, 1.15, -1.45, lamp);
     plate(.16, .025, .52, .25, 2.08, -.28, mat(0xe6dfbe));
     plate(.48, .025, .16, .25, 2.09, -.28, mat(0xe6dfbe));
   } else {
@@ -347,6 +488,8 @@ function unitMesh(u) {
     const mesh = new THREE.Mesh(geometry, material);
     mesh.castShadow = true; mesh.receiveShadow = true; g.add(mesh);
   }
+  const shadowSize = {collector: [3.6, 4.8], demolition: [3, 4.6], tank: [3.3, 4.2]}[u.kind] || [1.5, 1.3];
+  g.add(contactShadow(...shadowSize));
   // Models face north by default. The opposing force faces south.
   if (u.team === 'enemy') g.rotation.y = Math.PI;
   return g;
@@ -361,7 +504,13 @@ function healthBar(width) {
 function oreMesh(deposit) {
   const group = new THREE.Group();
   // One instanced draw per field, with the same crystal pattern for each pair.
-  const chunks = new THREE.InstancedMesh(new THREE.OctahedronGeometry(1), mat(0xdca338), 16);
+  if (!mats.has('ore')) {
+    mats.set('ore', new THREE.MeshStandardMaterial({color: 0xe0a734, roughness: .32, metalness: .35, emissive: 0x9a6512, emissiveIntensity: .45, flatShading: true}));
+    mats.set('ore-glow', new THREE.MeshBasicMaterial({map: (contactShadowMaterial(), blobTexture), color: 0xd8902a, transparent: true, opacity: .22, depthWrite: false, blending: THREE.AdditiveBlending}));
+  }
+  const glow = new THREE.Mesh(new THREE.PlaneGeometry(6.5, 6.5), mats.get('ore-glow'));
+  glow.rotation.x = -Math.PI / 2; glow.position.y = .02; group.add(glow);
+  const chunks = new THREE.InstancedMesh(new THREE.OctahedronGeometry(1), mats.get('ore'), 16);
   let seed = Math.floor((deposit.id - 1) / 2);
   const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
   const transform = new THREE.Object3D();
@@ -393,10 +542,10 @@ export class BattlefieldRenderer {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this.renderer.toneMappingExposure = 1.1;
     container.appendChild(this.renderer.domElement);
     this.productionQueues = new ProductionQueues(container, onCancelTraining, onEjectGarrisoned);
-    this.scene.add(new THREE.HemisphereLight(0xdde5ed, 0x625435, 2.0));
-    const sun = new THREE.DirectionalLight(0xffe6b2, 3); sun.position.set(-30, 65, 25); sun.castShadow = true;
-    sun.shadow.mapSize.set(compact ? 1024 : 2048, compact ? 1024 : 2048); Object.assign(sun.shadow.camera, {left:-60,right:60,top:70,bottom:-70,near:1,far:160}); sun.shadow.bias = -0.0005; this.scene.add(sun);
-    addEnvironment(this.scene);
+    this.scene.add(new THREE.HemisphereLight(0xd6e2f0, 0x5b4a2e, 1.7));
+    const sun = new THREE.DirectionalLight(0xffdfa6, 3.5); sun.position.set(-30, 65, 25); sun.castShadow = true;
+    sun.shadow.mapSize.set(compact ? 1024 : 2048, compact ? 1024 : 2048); Object.assign(sun.shadow.camera, {left:-60,right:60,top:70,bottom:-70,near:1,far:160}); sun.shadow.bias = -0.0005; sun.shadow.normalBias = .03; this.scene.add(sun);
+    addEnvironment(this.scene, compact);
     this.defensePads = new Map();
     this.entities = new Map(); this.oreFields = new Map(); this.combatEffects = new CombatEffects(this.scene, compact); this.lastShotId = 0; this.lastTime = 0; this.lastFrame = performance.now(); this.raycaster = new THREE.Raycaster(); this.pointer = new THREE.Vector2();
     const pointerStarts = new Map();
