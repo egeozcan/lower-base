@@ -16,6 +16,9 @@ mod navigation;
 #[cfg(any(test, feature = "ai-bench"))]
 #[path = "stock_hard.rs"]
 mod stock_hard;
+#[cfg(any(test, feature = "ai-bench"))]
+#[path = "traffic_benchmark.rs"]
+pub mod traffic_benchmark;
 
 const FIELD_EDGE: f32 = 17.0;
 const QUEUE_LIMIT: usize = 9;
@@ -231,6 +234,10 @@ pub struct Unit {
     detonated: bool,
     #[serde(skip)]
     navigation: navigation::Navigation,
+    // The ore deposit a collector works, by id, until it runs out or the
+    // collector finds a better one after a delivery.
+    #[serde(skip)]
+    deposit: Option<u32>,
     #[serde(skip)]
     rally_x: f32,
     #[serde(skip)]
@@ -615,6 +622,7 @@ impl Game {
             cooldown: 0.2,
             detonated: false,
             navigation: navigation::Navigation::default(),
+            deposit: None,
             rally_x: x,
             rally_z: direction * (27.0 + row * 2.2),
         });
@@ -1126,11 +1134,12 @@ impl Game {
         }
     }
     fn harvest_and_unload(&mut self, dt: f32) {
-        let snapshot = self.units.clone();
-        for unit in &mut self.units {
+        let mut snapshot = self.units.clone();
+        for (index, unit) in self.units.iter_mut().enumerate() {
             if unit.kind != UnitKind::Collector || !unit.on_field() {
                 continue;
             }
+            navigation::hold(unit);
             let refinery = self
                 .buildings
                 .iter()
@@ -1142,27 +1151,34 @@ impl Game {
             let Some(refinery) = refinery else {
                 continue;
             };
-            let deposit = self
-                .ore
-                .iter()
-                .enumerate()
-                .filter(|(_, o)| o.amount > 0.0)
-                .min_by(|(_, a), (_, b)| {
-                    distance_sq(unit.x, unit.z, a.x, a.z)
-                        .total_cmp(&distance_sq(unit.x, unit.z, b.x, b.z))
-                })
-                .map(|(i, _)| i);
+            let mut deposit = unit
+                .deposit
+                .and_then(|id| self.ore.iter().position(|o| o.id == id && o.amount > 0.0));
+            if deposit.is_none() && !unit.returning {
+                deposit =
+                    choose_deposit(&self.ore, unit, refinery, &snapshot, &self.buildings, None);
+                unit.deposit = deposit.map(|i| self.ore[i].id);
+                // Collectors choosing later in this step see the choice.
+                snapshot[index].deposit = unit.deposit;
+            }
             unit.returning |=
                 unit.cargo >= COLLECTOR_CAPACITY || (deposit.is_none() && unit.cargo > 0.0);
             let (x, z, stopping_distance) = if unit.returning {
-                (refinery.x, refinery.z, 5.4)
+                (refinery.x, refinery.z, UNLOAD_REACH)
             } else if let Some(i) = deposit {
-                (self.ore[i].x, self.ore[i].z, 3.0)
+                (self.ore[i].x, self.ore[i].z, MINING_REACH)
             } else {
                 continue;
             };
             let distance = distance_sq(unit.x, unit.z, x, z).sqrt();
             if distance > stopping_distance + 0.01 {
+                // Loaded collectors have right of way, so empty ones leaving
+                // the refinery make room for deliveries in narrow gaps.
+                let right_of_way = if unit.returning {
+                    navigation::RightOfWay::Delivery
+                } else {
+                    navigation::RightOfWay::Harvest
+                };
                 navigation::move_toward(
                     unit,
                     (x, z),
@@ -1170,6 +1186,7 @@ impl Game {
                     dt,
                     &snapshot,
                     &self.buildings,
+                    right_of_way,
                 );
             } else if unit.returning {
                 if unit.team == Team::Player {
@@ -1179,6 +1196,17 @@ impl Game {
                 }
                 unit.cargo = 0.0;
                 unit.returning = false;
+                // Collectors rebalance between deposits after each delivery.
+                let next = choose_deposit(
+                    &self.ore,
+                    unit,
+                    refinery,
+                    &snapshot,
+                    &self.buildings,
+                    deposit,
+                );
+                unit.deposit = next.map(|i| self.ore[i].id);
+                snapshot[index].deposit = unit.deposit;
             } else if let Some(i) = deposit {
                 let ore = &mut self.ore[i];
                 let mined = (MINING_RATE * dt)
@@ -1186,8 +1214,17 @@ impl Game {
                     .min(COLLECTOR_CAPACITY - unit.cargo);
                 unit.cargo += mined;
                 ore.amount -= mined;
-                // Deliver a partial load when this deposit is exhausted.
-                unit.returning = unit.cargo >= COLLECTOR_CAPACITY || ore.amount <= 0.0;
+                unit.returning = unit.cargo >= COLLECTOR_CAPACITY;
+                if ore.amount <= 0.0 && !unit.returning {
+                    // The deposit ran out: fill up at another one when that
+                    // is worth the detour, or deliver a part load.
+                    let next =
+                        choose_deposit(&self.ore, unit, refinery, &snapshot, &self.buildings, None);
+                    unit.returning = !next
+                        .is_some_and(|j| tops_up(unit, &self.ore[j], refinery, &self.buildings));
+                    unit.deposit = next.map(|j| self.ore[j].id);
+                    snapshot[index].deposit = unit.deposit;
+                }
             }
         }
     }
@@ -1272,6 +1309,7 @@ impl Game {
             if !unit.on_field() || unit.kind == UnitKind::Collector {
                 continue;
             }
+            navigation::hold(unit);
             unit.cooldown = (unit.cooldown - dt).max(0.0);
             let retreating = if unit.team == Team::Player {
                 player_retreat
@@ -1286,6 +1324,7 @@ impl Game {
                     dt,
                     &snapshot,
                     &buildings,
+                    navigation::RightOfWay::Regroup,
                 );
                 continue;
             }
@@ -1403,7 +1442,20 @@ impl Game {
                                 0.95
                             }
                     };
-                    navigation::move_toward(unit, (x, z), stop, dt, &snapshot, &buildings);
+                    let right_of_way = if unit.state == UnitState::Gather {
+                        navigation::RightOfWay::Regroup
+                    } else {
+                        navigation::RightOfWay::Assault
+                    };
+                    navigation::move_toward(
+                        unit,
+                        (x, z),
+                        stop,
+                        dt,
+                        &snapshot,
+                        &buildings,
+                        right_of_way,
+                    );
                 }
             }
         }
@@ -1584,6 +1636,81 @@ fn deploy_garrisoned_unit(unit: &mut Unit, buildings: &[Building], mode: Mode) -
     };
     unit.navigation = navigation::Navigation::default();
     true
+}
+
+const UNLOAD_REACH: f32 = 5.4;
+const MINING_REACH: f32 = 3.0;
+// Deposit choice is weighed in driving distance per load. Collectors working
+// the same deposit crowd its mining spots, and collectors on the same flank
+// of the field share the one-lane gap beside the factory or barracks, where
+// they stop to let each other through.
+const SHARED_DEPOSIT: f32 = 3.0;
+const SHARED_FLANK: f32 = 18.0;
+// After a delivery, a collector changes deposits only for this gain per load.
+const SWITCH_GAIN: f32 = 2.0;
+
+/// The deposit for a collector's next load: the cheapest per load, counting
+/// the drive to it from where the collector is and on to the refinery by road,
+/// the other collectors sharing it or its flank, and how much of a load it
+/// still holds once those working it have theirs.
+fn choose_deposit(
+    ore: &[OreDeposit],
+    unit: &Unit,
+    refinery: &Building,
+    units: &[Unit],
+    buildings: &[Building],
+    current: Option<usize>,
+) -> Option<usize> {
+    let roads = navigation::Roads::new(buildings, unit);
+    let here = (unit.x, unit.z);
+    let home = (refinery.x, refinery.z);
+    let east = |o: &OreDeposit| o.x > refinery.x;
+    let others: Vec<_> = units
+        .iter()
+        .filter(|u| u.id != unit.id && u.kind == UnitKind::Collector && u.on_field())
+        .filter_map(|u| {
+            let id = u.deposit?;
+            ore.iter()
+                .find(|o| o.id == id && o.amount > 0.0)
+                .map(|o| (u, o))
+        })
+        .collect();
+    let cost = |i: usize| {
+        let o = &ore[i];
+        let at = (o.x, o.z);
+        let trip = roads.distance(at, home, UNLOAD_REACH);
+        let reach = roads.distance(here, at, MINING_REACH);
+        let sharing = others.iter().filter(|(_, d)| d.id == o.id).count();
+        let flank = others
+            .iter()
+            .filter(|(u, d)| u.team == unit.team && east(d) == east(o))
+            .count();
+        let reserved: f32 = others
+            .iter()
+            .filter(|(u, d)| d.id == o.id && !u.returning)
+            .map(|(u, _)| COLLECTOR_CAPACITY - u.cargo)
+            .sum();
+        let load = ((o.amount - reserved) / COLLECTOR_CAPACITY).clamp(0.1, 1.0);
+        let drive = reach + trip + sharing as f32 * SHARED_DEPOSIT + flank as f32 * SHARED_FLANK;
+        drive / load - if current == Some(i) { SWITCH_GAIN } else { 0.0 }
+    };
+    (0..ore.len())
+        .filter(|&i| ore[i].amount > 0.0)
+        .map(|i| (i, cost(i)))
+        .filter(|(_, c)| c.is_finite())
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(i, _)| i)
+}
+
+// A collector with a part load fills up at `next` first when the detour is
+// shorter than the unused share of a round trip from there.
+fn tops_up(unit: &Unit, next: &OreDeposit, refinery: &Building, buildings: &[Building]) -> bool {
+    let roads = navigation::Roads::new(buildings, unit);
+    let (here, at, home) = ((unit.x, unit.z), (next.x, next.z), (refinery.x, refinery.z));
+    let trip = roads.distance(at, home, UNLOAD_REACH);
+    let detour =
+        roads.distance(here, at, MINING_REACH) + trip - roads.distance(here, home, UNLOAD_REACH);
+    detour < (1.0 - unit.cargo / COLLECTOR_CAPACITY) * 2.0 * trip
 }
 
 fn demolition_damage(distance: f32) -> f32 {
@@ -2480,6 +2607,212 @@ mod tests {
                     "seed {seed}: {:?} collector {} stalled at ({}, {}), cargo {}, returning {}, deliveries {}",
                     u.team, u.id, u.x, u.z, u.cargo, u.returning, deliveries[i]);
             }
+        }
+    }
+
+    // Collectors only, so harvest_and_unload and collisions move everything.
+    fn collectors_at(team: Team, placements: &[(f32, f32, f32)]) -> Game {
+        let mut g = Game::with_seed(26);
+        g.units.clear();
+        for &(x, z, cargo) in placements {
+            g.spawn(team, UnitKind::Collector);
+            let u = g.units.last_mut().unwrap();
+            u.x = x;
+            u.z = if team == Team::Player { z } else { -z };
+            u.cargo = cargo;
+            u.returning = cargo >= COLLECTOR_CAPACITY;
+        }
+        g
+    }
+
+    #[test]
+    fn empty_collector_makes_way_for_a_loaded_one_in_the_factory_gap() {
+        for team in [Team::Player, Team::Enemy] {
+            // The gap beside the factory fits one collector. The loaded one
+            // enters from the ore field as the empty one comes down.
+            let mut g = collectors_at(team, &[(15.2, 34.0, 100.0), (15.6, 46.5, 0.0)]);
+            let (mut delivered, mut mining) = (None, None);
+            for step in 0..300 {
+                g.harvest_and_unload(0.05);
+                g.resolve_collisions();
+                if delivered.is_none() && g.units[0].cargo == 0.0 {
+                    delivered = Some(step);
+                }
+                if mining.is_none() && g.units[1].cargo > 0.0 {
+                    mining = Some(step);
+                }
+            }
+            assert!(
+                delivered.is_some_and(|step| step < 120),
+                "{team:?}: loaded collector delivered at {delivered:?}"
+            );
+            assert!(
+                mining.is_some_and(|step| step < 200),
+                "{team:?}: empty collector reached ore at {mining:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn collectors_follow_each_other_to_the_refinery() {
+        for team in [Team::Player, Team::Enemy] {
+            let file: Vec<_> = (0..3)
+                .map(|i| (12.0, 26.0 - i as f32 * 4.0, 100.0))
+                .collect();
+            let mut g = collectors_at(team, &file);
+            let mut delivered = [None; 3];
+            for step in 0..300 {
+                g.harvest_and_unload(0.05);
+                g.resolve_collisions();
+                for (i, u) in g.units.iter().enumerate() {
+                    if delivered[i].is_none() && u.cargo == 0.0 {
+                        delivered[i] = Some(step);
+                    }
+                }
+            }
+            // Alone, the leader needs about 110 steps. Followers keep pace
+            // a few lengths behind instead of detouring around it.
+            assert!(
+                delivered.iter().all(|d| d.is_some_and(|step| step < 190)),
+                "{team:?}: deliveries at steps {delivered:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parked_units_step_aside_for_allies_but_not_opponents() {
+        for opponent in [false, true] {
+            let mut g = Game::new();
+            g.units.clear();
+            g.buildings.clear();
+            g.spawn(Team::Player, UnitKind::Soldier);
+            g.spawn(
+                if opponent { Team::Enemy } else { Team::Player },
+                UnitKind::Tank,
+            );
+            g.units[0].x = 0.0;
+            g.units[0].z = 0.0;
+            g.units[1].x = 0.0;
+            g.units[1].z = 9.0;
+            let mut moved: f32 = 0.0;
+            for _ in 0..100 {
+                let snapshot = g.units.clone();
+                let (parked, passing) = g.units.split_at_mut(1);
+                navigation::hold(&mut parked[0]);
+                navigation::move_toward(
+                    &mut parked[0],
+                    (0.0, 0.0),
+                    0.15,
+                    0.05,
+                    &snapshot,
+                    &[],
+                    navigation::RightOfWay::Regroup,
+                );
+                navigation::hold(&mut passing[0]);
+                navigation::move_toward(
+                    &mut passing[0],
+                    (0.0, -12.0),
+                    0.15,
+                    0.05,
+                    &snapshot,
+                    &[],
+                    navigation::RightOfWay::Assault,
+                );
+                g.resolve_collisions();
+                moved = moved.max(distance_sq(g.units[0].x, g.units[0].z, 0.0, 0.0).sqrt());
+            }
+            if opponent {
+                assert!(moved < 0.2, "made way for an opponent: {moved}");
+                assert!(g.units[1].z < -9.0, "the opponent went around");
+            } else {
+                assert!(moved > 1.5, "did not make way for an ally: {moved}");
+            }
+        }
+    }
+
+    #[test]
+    fn two_collectors_work_opposite_flanks() {
+        // On seed 42 the second collector used to follow the first to the
+        // same flank and meet it head-on in the gap beside the factory.
+        for team in [Team::Player, Team::Enemy] {
+            let mut g = Game::with_seed(42);
+            g.units.clear();
+            g.spawn(team, UnitKind::Collector);
+            let mut deliveries = 0;
+            for step in 0..1200 {
+                if step == 100 {
+                    g.spawn(team, UnitKind::Collector);
+                }
+                let cargo: Vec<_> = g.units.iter().map(|u| u.cargo).collect();
+                g.harvest_and_unload(0.05);
+                g.resolve_collisions();
+                deliveries += g
+                    .units
+                    .iter()
+                    .zip(&cargo)
+                    .filter(|(u, &c)| c > 0.0 && u.cargo == 0.0)
+                    .count();
+            }
+            let flanks: Vec<_> = g
+                .units
+                .iter()
+                .map(|u| {
+                    let ore = g.ore.iter().find(|o| Some(o.id) == u.deposit).unwrap();
+                    ore.x > 0.0
+                })
+                .collect();
+            assert_ne!(
+                flanks[0], flanks[1],
+                "{team:?}: both collectors on one flank"
+            );
+            assert!(deliveries >= 7, "{team:?}: {deliveries} deliveries in 60s");
+        }
+    }
+
+    #[test]
+    fn collector_fills_up_elsewhere_when_its_deposit_runs_out() {
+        let mut g = Game::new();
+        g.units.clear();
+        g.credits = 0.0;
+        let refinery = g
+            .buildings
+            .iter()
+            .find(|b| b.team == Team::Player && b.kind == BuildingKind::Refinery)
+            .map(|b| (b.x, b.z))
+            .unwrap();
+        let nearest = (0..g.ore.len())
+            .filter(|&i| g.ore[i].z > 0.0)
+            .min_by(|&a, &b| {
+                let d = |i: usize| distance_sq(g.ore[i].x, g.ore[i].z, refinery.0, refinery.1);
+                d(a).total_cmp(&d(b))
+            })
+            .unwrap();
+        // Working the deposit nearest the refinery as it runs low.
+        g.ore[nearest].amount = 30.0;
+        g.spawn(Team::Player, UnitKind::Collector);
+        g.units[0].x = g.ore[nearest].x;
+        g.units[0].z = g.ore[nearest].z;
+        g.units[0].deposit = Some(g.ore[nearest].id);
+        for _ in 0..1200 {
+            g.harvest_and_unload(0.05);
+            if g.credits > 0.0 {
+                break;
+            }
+        }
+        assert_eq!(g.ore[nearest].amount, 0.0);
+        assert_eq!(g.credits, COLLECTOR_CAPACITY, "delivered a part load");
+    }
+
+    #[test]
+    fn collector_pushed_into_a_gap_narrower_than_itself_gets_out() {
+        for team in [Team::Player, Team::Enemy] {
+            // Between the command center and factory, overlapping both.
+            let mut g = collectors_at(team, &[(5.25, 46.7, 100.0)]);
+            for _ in 0..100 {
+                g.harvest_and_unload(0.05);
+                g.resolve_collisions();
+            }
+            assert_eq!(g.units[0].cargo, 0.0, "{team:?} collector stayed wedged");
         }
     }
 

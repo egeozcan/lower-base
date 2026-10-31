@@ -668,14 +668,25 @@ impl Game {
             .iter()
             .filter(|b| b.team != team && b.hp > 0.0 && b.kind == BuildingKind::Emplacement)
             .count() as f32;
+        // Collectors share the factory with tanks, the counter to massed
+        // infantry. While infantry is the threat, or a rush has just been
+        // repelled, the factory stays on combat units; otherwise collectors
+        // working separate flanks pay for themselves quickly, so invest earlier.
+        let counters_need_factory = strategy == Strategy::AntiInfantry;
         let collector_goal = if recovering_rush {
-            2
+            1
         } else if strategy == Strategy::Economy {
             self.hard_commanders[index].economy
         } else if self.time < 25.0 {
-            1
-        } else {
+            if counters_need_factory {
+                1
+            } else {
+                2
+            }
+        } else if counters_need_factory {
             2
+        } else {
+            3
         };
         // A few surviving riflemen should not block economic recovery when
         // our defenders comfortably outmatch them. Armor and trucks remain a
@@ -800,7 +811,7 @@ mod tests {
                 .contains(&UnitKind::Demolition));
             let mut deployed = false;
             let mut exploded = false;
-            for tick in 0..400 {
+            for tick in 0..480 {
                 if tick % 10 == 0 {
                     game.ai_hard(team);
                 }

@@ -24,8 +24,37 @@ fn main() {
         );
         return;
     }
+    if args.first().is_some_and(|arg| arg == "--traffic") {
+        use lower_base::simulation::traffic_benchmark::{marches, mining_runs};
+        let mining = mining_runs();
+        for per_team in [1, 2, 3, 4, 6] {
+            let runs: Vec<_> = mining.iter().filter(|r| r.collectors == per_team).collect();
+            let delivered: usize = runs.iter().map(|r| r.deliveries[0] + r.deliveries[1]).sum();
+            eprintln!(
+                "{per_team} collectors per side: {:.2} deliveries each in 180s, fewest {}",
+                delivered as f32 / (runs.len() * per_team * 2) as f32,
+                runs.iter().map(|r| r.fewest_deliveries).min().unwrap_or(0)
+            );
+        }
+        let marches = marches();
+        for r in &marches {
+            eprintln!(
+                "{} {:?} x{}: {}/{} arrived after {:?}s",
+                r.scenario, r.kind, r.units, r.arrived, r.units, r.seconds_until_all_arrived
+            );
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "mining": mining,
+                "marches": marches,
+            }))
+            .unwrap()
+        );
+        return;
+    }
     if args.iter().any(|arg| arg == "--help") {
-        println!("ai-bench [seed-count=12] [first-seed=0] [max-seconds=360] [standard|rush|balanced|stock|player-armor|interception|mixed-wave|tank-opening|all]\nstock: five original scenarios; player-armor: three recordings and four automated tank strategies; interception: an unopposed infantry wave; mixed-wave: two recordings and three mixed-army attacks; tank-opening: a recording and three armor-first infantry rushes; all: all twenty-two scenarios.\nai-bench --balance runs 72 equal-credit counter battles.\nPrints JSON; timeouts count as draws.");
+        println!("ai-bench [seed-count=12] [first-seed=0] [max-seconds=360] [standard|rush|balanced|stock|player-armor|interception|mixed-wave|tank-opening|all]\nstock: five original scenarios; player-armor: three recordings and four automated tank strategies; interception: an unopposed infantry wave; mixed-wave: two recordings and three mixed-army attacks; tank-opening: a recording and three armor-first infantry rushes; all: all twenty-two scenarios.\nai-bench --balance runs 72 equal-credit counter battles.\nai-bench --traffic measures collector deliveries and group movement under traffic.\nPrints JSON; timeouts count as draws.");
         return;
     }
     let number = |i: usize, default: u32| -> u32 {
