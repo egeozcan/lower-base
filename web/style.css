@@ -73,6 +73,8 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--gold);outline-offse
 .sidebar-top{grid-area:top;display:flex;gap:4px;margin-top:6px}
 .sidebar-top button{height:28px}
 .icon-button{width:44px;flex:none;display:grid;place-items:center}
+.speed-button{width:48px;flex:none;font:700 12px/1 'Chakra Petch',sans-serif;letter-spacing:.06em}
+.speed-button.fast{color:var(--gold-hi)}
 #abort{flex:1;font:700 11px/1 'Chakra Petch',sans-serif;letter-spacing:.14em}
 
 .radar{grid-area:radar;position:relative;height:180px;box-shadow:inset 0 0 0 3px #1a1f22}
@@ -206,7 +208,7 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--gold);outline-offse
   .menu-status{margin-top:4px}
 
   #app{background:linear-gradient(#2a3034,#1c2124);
-    grid-template-columns:44px auto minmax(0,1fr) auto;
+    grid-template-columns:auto auto minmax(0,1fr) auto;
     grid-template-rows:44px minmax(0,1fr) auto auto;
     grid-template-areas:"top credits forces clock" "field field field field" "orders orders orders orders" "build build build build";
     row-gap:0}
@@ -215,8 +217,8 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--gold);outline-offse
   .scene-vignette{box-shadow:inset 0 0 40px rgba(0,0,0,.45)}
   .hud-status,.spectator-note{left:8px;top:8px;padding:5px 8px;font-size:11px;letter-spacing:.12em}
   .hud-status:not([hidden])~.spectator-note{top:40px}
-  .sidebar-top{margin:0}
-  .sidebar-top .icon-button{height:44px;border-width:0 1px 0 0}
+  .sidebar-top{margin:0;gap:0}
+  .sidebar-top .icon-button,.sidebar-top .speed-button{height:44px;border-width:0 1px 0 0}
   #abort{display:none}
   .credits-row{display:contents}
   .credits{grid-area:credits;padding:0 8px}
@@ -271,12 +273,12 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--gold);outline-offse
     grid-template-areas:"field . credits ." "field . forces ." "field . build ." "field . econ .";
     row-gap:6px}
   .battlefield{grid-row:1/-1;border-top:0;border-bottom:0;border-right:2px solid var(--void);box-shadow:1px 0 0 var(--steel-lo)}
-  .hud-status,.spectator-note{left:160px;top:8px}
+  .hud-status,.spectator-note{left:214px;top:8px}
   .hud-status:not([hidden])~.spectator-note{top:40px}
   .sidebar-top{grid-area:field;justify-self:start;align-self:start;z-index:3;margin:8px 0 0 8px}
-  .sidebar-top .icon-button{height:44px;border-width:1px}
+  .sidebar-top .icon-button,.sidebar-top .speed-button{height:44px;border-width:1px}
   #abort{display:none}
-  .radar{grid-area:field;justify-self:start;align-self:start;z-index:3;width:96px;height:80px;margin:8px 0 0 58px;box-shadow:0 4px 16px rgba(0,0,0,.5)}
+  .radar{grid-area:field;justify-self:start;align-self:start;z-index:3;width:96px;height:80px;margin:8px 0 0 110px;box-shadow:0 4px 16px rgba(0,0,0,.5)}
   .view-switch{top:calc(100% + 4px);bottom:auto;left:-1px;right:-1px}
   .view-switch button{flex:1;height:32px;font-size:11px;background:linear-gradient(var(--steel-top),var(--steel-bottom));border-color:var(--steel-hi) var(--void) var(--void) var(--steel-hi)}
   .view-switch button.active{background:#2d2817;border-color:var(--gold)}

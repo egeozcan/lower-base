@@ -727,7 +727,7 @@ export class BattlefieldRenderer {
     if (!snapshot) return;
     const restarting = snapshot.time < this.lastTime;
     const now = performance.now();
-    const dt = Math.min(.1, Math.max(0, (now - this.lastFrame) / 1000));
+    const dt = Math.min(.1, Math.max(0, (now - this.lastFrame) / 1000)) * (this.timeScale || 1);
     this.lastFrame = now;
     if (restarting) {
       this.reset();

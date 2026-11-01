@@ -14,6 +14,8 @@ const specs = [
   { kind: 'collector', short: 'HARVEST', name: 'ORE COLLECTOR', cost: 200, icon: '<svg viewBox="0 0 48 48"><path fill="#252b24" d="M5 32h38v12H5z"/><path fill="#858979" d="M9 36h4v4H9zm8 0h4v4h-4zm8 0h4v4h-4zm8 0h4v4h-4z"/><path fill="#8c9aa1" d="M16 12h28l-2 20H18z"/><path fill="#6484bc" d="M15 10h30v3H15z"/><path fill="#e9bd4c" d="m19 12 5-6 6 3 5-5 5 8z"/><path fill="#6484bc" d="M6 18h10v12H6z"/><path fill="#1c2a33" d="M8 20h7v4H8z"/><path fill="#e3b437" d="M0 44 6 34h3l-4 10z"/></svg>', key: '6' },
 ];
 let game, renderer, snapshot, lastTime = 0, ended = false, paused = false, demo = false;
+const SPEEDS = [0.5, 1, 2, 4];
+let speedIndex = 1;
 const debugEnabled = BUILD_INFO.development && typeof GameBridge.prototype.debug_snapshot === 'function';
 let debugRecorder = null, debugReport = null;
 const debugActions = debugEnabled ? createDebugActions(document.querySelector('#game-over .overlay-card'), () => debugReport) : null;
@@ -67,6 +69,7 @@ function beginMatch(isDemo = false) {
   try {
     if (!renderer) renderer = new BattlefieldRenderer($('scene'), onSelect, cancelTraining, ejectGarrisoned);
     renderer.reset();
+    setSpeed(speedIndex);
     setView('map');
     $('pause').focus();
   } catch (error) {
@@ -94,6 +97,14 @@ function abortMatch() {
   $('app').hidden = true;
   $('main-menu').hidden = false;
   $('start-game').focus();
+}
+function setSpeed(index) {
+  speedIndex = Math.max(0, Math.min(SPEEDS.length - 1, index));
+  const speed = SPEEDS[speedIndex], label = `${speed === 0.5 ? '½' : speed}×`;
+  $('speed').textContent = label;
+  $('speed').setAttribute('aria-label', `Game speed ${speed}x`);
+  $('speed').classList.toggle('fast', speed > 1);
+  if (renderer) renderer.timeScale = speed;
 }
 function setPaused(value) {
   if (!game || ended) return;
@@ -307,7 +318,15 @@ function frame(now) {
   if (!lastTime) lastTime = now;
   const dt = Math.min((now - lastTime) / 1000, .1); lastTime = now;
   if (game && !paused) {
-    if (!ended) { game.update(dt); debugRecorder?.updated(dt); refresh(); }
+    if (!ended) {
+      // The simulation clamps one update to 0.25s, so feed scaled time in 0.1s chunks.
+      for (let remaining = dt * SPEEDS[speedIndex]; remaining > 1e-4;) {
+        const step = Math.min(remaining, .1);
+        game.update(step); debugRecorder?.updated(step);
+        remaining -= step;
+      }
+      refresh();
+    }
     else renderer.update(snapshot, selected);
   }
   requestAnimationFrame(frame);
@@ -333,6 +352,7 @@ $('start-demo').addEventListener('click', () => beginMatch(true));
 $('restart').addEventListener('click', () => beginMatch(demo));
 $('pause').addEventListener('click', () => setPaused(true));
 $('resume').addEventListener('click', () => setPaused(false));
+$('speed').addEventListener('click', event => setSpeed((speedIndex + (event.shiftKey ? SPEEDS.length - 1 : 1)) % SPEEDS.length));
 for (const id of ['abort', 'pause-abort', 'end-menu']) $(id).addEventListener('click', abortMatch);
 window.addEventListener('keydown', event => {
   if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || !game) return;
@@ -348,6 +368,8 @@ window.addEventListener('keydown', event => {
     }
     return;
   }
+  if (event.key === '+' || event.key === '=') { setSpeed(speedIndex + 1); return; }
+  if (event.key === '-' || event.key === '_') { setSpeed(speedIndex - 1); return; }
   if (!canCommand()) return;
   if (event.key === '1') setMode('gather');
   if (event.key === '2') setMode('attack');
