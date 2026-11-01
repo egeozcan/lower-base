@@ -3,6 +3,8 @@
 use super::*;
 
 const COMBAT_KINDS: [UnitKind; 3] = [UnitKind::Soldier, UnitKind::Rocket, UnitKind::Tank];
+// A waiting truck is sent at a target only for more than its own price.
+pub(super) const TRUCK_STRIKE_VALUE: f32 = 300.0;
 
 #[derive(Clone, Default)]
 struct Force {
@@ -260,6 +262,27 @@ impl Game {
         !built
     }
 
+    /// Whether the opponent has massed rifles with nothing that can stop a
+    /// truck: no tanks, and too few rockets to bring it down on the way in.
+    fn rifles_without_truck_counter(&self, team: Team) -> bool {
+        if !self.alive_building(team, BuildingKind::Factory)
+            || self.has_demolition(team)
+            || !self
+                .production_queue(team, BuildingKind::Factory)
+                .is_empty()
+        {
+            return false;
+        }
+        let count = |kind| {
+            self.units
+                .iter()
+                .filter(|u| u.team != team && u.on_field() && u.kind == kind)
+                .count()
+        };
+        let soldiers = count(UnitKind::Soldier);
+        soldiers >= 8 && count(UnitKind::Tank) == 0 && count(UnitKind::Rocket) * 4 <= soldiers
+    }
+
     fn demolition_interception(&self, team: Team) -> bool {
         if !self.alive_building(team, BuildingKind::Factory) || self.has_demolition(team) {
             return false;
@@ -397,12 +420,14 @@ impl Game {
                 if u.z * direction < 5.0 {
                     local.add(u.kind, u.hp);
                 }
-                if u.kind == UnitKind::Collector {
-                    collectors += 1;
-                } else if matches!(u.state, UnitState::Gather | UnitState::Garrison) {
-                    reserves += 1;
-                } else {
-                    attackers += 1;
+                // Trucks are sent on their own, never as part of a wave.
+                match u.kind {
+                    UnitKind::Collector => collectors += 1,
+                    UnitKind::Demolition => (),
+                    _ if matches!(u.state, UnitState::Gather | UnitState::Garrison) => {
+                        reserves += 1
+                    }
+                    _ => attackers += 1,
                 }
             } else if u.on_field() {
                 opposing.add(u.kind, u.hp);
@@ -528,17 +553,21 @@ impl Game {
         } else if retreating && !retreat {
             self.set_team_mode(team, Mode::Gather);
         }
-        if active_interceptor {
-            // Release through the normal Gather order if it completed while
-            // sheltered, then send the truck separately from the reserves.
-            for u in self.units.iter_mut().filter(|u| {
-                u.team == team && u.kind == UnitKind::Demolition && u.state == UnitState::Gather
-            }) {
-                u.state = UnitState::Attack;
+        // Send a waiting truck on its own once a strike is clearly worth it,
+        // or at once to intercept an incoming wave. It also strikes enemies
+        // that come near its post by itself.
+        let strike_value = if active_interceptor {
+            0.0
+        } else {
+            TRUCK_STRIKE_VALUE
+        };
+        if self.send_truck(team, strike_value) && team == Team::Enemy {
+            self.ai_status = if active_interceptor {
+                "INTERCEPTING AN UNOPPOSED WAVE"
+            } else {
+                "SENDING A DEMOLITION STRIKE"
             }
-            if team == Team::Enemy {
-                self.ai_status = "INTERCEPTING AN UNOPPOSED WAVE".into();
-            }
+            .into();
         }
         let wave = if team == Team::Enemy {
             self.ai_wave_timer
@@ -621,7 +650,7 @@ impl Game {
                 .collect();
             for u in &mut self.units {
                 if u.team == team
-                    && u.kind != UnitKind::Collector
+                    && !matches!(u.kind, UnitKind::Collector | UnitKind::Demolition)
                     && u.state == UnitState::Gather
                     && ((launch && u.kind != UnitKind::Rocket) || ready.contains(&u.id))
                 {
@@ -647,6 +676,19 @@ impl Game {
             own.add(kind, kind.health());
             if kind == UnitKind::Collector {
                 collectors += 1;
+            }
+        }
+        // A massed rifle army with no armor and few rockets cannot stop a
+        // truck before it reaches the blob, so answer it with one before the
+        // rifles arrive.
+        if !threatened && self.rifles_without_truck_counter(team) {
+            self.queue_unit(team, UnitKind::Demolition);
+            if team == Team::Enemy {
+                self.ai_status = "PREPARING A DEMOLITION TRUCK".into();
+            }
+            // Save for it like the interception below.
+            if !self.has_demolition(team) {
+                return;
             }
         }
         if self.demolition_interception(team) {
@@ -858,10 +900,12 @@ mod tests {
                     !game.demolition_interception(team),
                     "{team:?} {kind:?} at {z}"
                 );
-                game.ai_hard(team);
-                assert!(!game
-                    .production_queue(team, BuildingKind::Factory)
-                    .contains(&UnitKind::Demolition));
+                if kind != UnitKind::Soldier {
+                    game.ai_hard(team);
+                    assert!(!game
+                        .production_queue(team, BuildingKind::Factory)
+                        .contains(&UnitKind::Demolition));
+                }
             }
             let mut game = unopposed_infantry(team, UnitKind::Soldier, 24.0);
             game.units
@@ -872,6 +916,99 @@ mod tests {
                 !game.demolition_interception(team),
                 "a widely dispersed army is a poor blast target"
             );
+            // Riflemen already at the base are left to the defenders.
+            let mut game = unopposed_infantry(team, UnitKind::Soldier, -20.0);
+            game.ai_hard(team);
+            assert!(!game
+                .production_queue(team, BuildingKind::Factory)
+                .contains(&UnitKind::Demolition));
+        }
+    }
+
+    #[test]
+    fn hard_answers_massed_rifles_with_a_truck_only_when_nothing_can_stop_it() {
+        use UnitKind::{Rocket as R, Soldier as S, Tank as T};
+        let armies: [(&[UnitKind], bool); 4] = [
+            (&[S; 10], true),
+            (&[S, S, S, S, S, S, S, S, S, T], false),
+            (&[S, S, S, S, S, S, S, S, R, R, R], false),
+            (&[S; 6], false),
+        ];
+        for team in [Team::Player, Team::Enemy] {
+            for (army, truck) in armies {
+                let mut g = Game::with_difficulty(5, Difficulty::Hard);
+                let other = if team == Team::Player {
+                    Team::Enemy
+                } else {
+                    Team::Player
+                };
+                g.units.retain(|u| u.team == team);
+                for _ in 0..3 {
+                    g.spawn(team, UnitKind::Collector);
+                }
+                for &kind in army {
+                    g.spawn(other, kind);
+                }
+                g.credits = 2000.0;
+                g.ai_credits = 2000.0;
+                g.ai_hard(team);
+                assert_eq!(
+                    g.production_queue(team, BuildingKind::Factory)
+                        .contains(&UnitKind::Demolition),
+                    truck,
+                    "{team:?} {army:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hard_sends_its_truck_alone_and_only_for_a_worthwhile_strike() {
+        for team in [Team::Player, Team::Enemy] {
+            let mut g = Game::with_difficulty(5, Difficulty::Hard);
+            let other = if team == Team::Player {
+                Team::Enemy
+            } else {
+                Team::Player
+            };
+            g.units.clear();
+            g.ai_decision_timer = f32::INFINITY;
+            for _ in 0..8 {
+                g.spawn(team, UnitKind::Tank);
+            }
+            g.spawn(team, UnitKind::Demolition);
+            for u in &mut g.units {
+                u.x = u.rally_x;
+                u.z = u.rally_z;
+            }
+            g.spawn(other, UnitKind::Soldier);
+            g.ai_wave_timer = 0.0;
+            g.demo_wave_timer = 0.0;
+            g.ai_hard(team);
+            let state = |g: &Game, kind| {
+                g.units
+                    .iter()
+                    .find(|u| u.team == team && u.kind == kind)
+                    .unwrap()
+                    .state
+            };
+            assert_eq!(state(&g, UnitKind::Tank), UnitState::Attack, "{team:?}");
+            assert_eq!(
+                state(&g, UnitKind::Demolition),
+                UnitState::Gather,
+                "a lone rifleman is not worth the truck"
+            );
+            // A rifle group crossing midfield is.
+            let direction = if team == Team::Player { 1.0 } else { -1.0 };
+            for i in 0..8 {
+                g.spawn(other, UnitKind::Soldier);
+                let u = g.units.last_mut().unwrap();
+                u.x = (i % 4) as f32 * 2.4 - 3.6;
+                u.z = direction * (2.0 + (i / 4) as f32 * 2.2);
+                u.state = UnitState::Attack;
+            }
+            g.ai_hard(team);
+            assert_eq!(state(&g, UnitKind::Demolition), UnitState::Attack);
         }
     }
 
@@ -1076,9 +1213,14 @@ mod tests {
 
     #[test]
     fn hard_selects_visible_counters_and_spends_on_them() {
+        // Pure rifles cannot stop a truck, so it comes before the tanks.
         for (opponent, expected, counter) in [
             (UnitKind::Tank, Strategy::AntiArmor, UnitKind::Rocket),
-            (UnitKind::Soldier, Strategy::AntiInfantry, UnitKind::Tank),
+            (
+                UnitKind::Soldier,
+                Strategy::AntiInfantry,
+                UnitKind::Demolition,
+            ),
             (UnitKind::Demolition, Strategy::AntiArmor, UnitKind::Rocket),
         ] {
             for team in [Team::Player, Team::Enemy] {

@@ -2,15 +2,16 @@ import init, { GameBridge } from './pkg/lower_base.js';
 import { BattlefieldRenderer } from './renderer.js';
 import { BUILD_INFO } from './pkg/build_config.js';
 import { MatchDebugRecorder, createDebugActions } from './match-debug.mjs';
+import { Vector3 } from './three.module.js';
 
 const $ = id => document.getElementById(id);
 const selected = new Set();
 const specs = [
-  { kind: 'soldier', name: 'RIFLE INFANTRY', cost: 60, icon: '<svg viewBox="0 0 48 48"><path fill="#c9b286" d="M18 15h13v13H18z"/><path fill="#6484bc" d="M13 17q0-15 11-15t12 15zM8 44V31l11-6h11l10 6v13z"/><path fill="#243126" d="M18 28h4v16h-4zm10 0h4v16h-4z"/><path stroke="#d5c69d" stroke-width="4" d="m8 39 34-12"/></svg>', key: '3' },
-  { kind: 'rocket', name: 'ROCKET TROOPER', cost: 90, icon: '<svg viewBox="0 0 48 48"><path fill="#9aa477" d="m5 34 30-25 9 10-30 25z"/><path fill="#ddd09c" d="m28 15 7-6 9 10-7 6z"/><path fill="#252b24" d="m36 8 9 10 3-4-9-9zM15 31l7 8-5 7-8-8z"/></svg>', key: '4' },
-  { kind: 'tank', name: 'SIEGE TANK', cost: 150, icon: '<svg viewBox="0 0 48 48"><path fill="#252b24" d="M3 26h42v17H3z"/><path fill="#a2aa7d" d="m6 24 5-7h26l6 7v11H6z"/><path fill="#6484bc" d="m15 15 4-7h15l5 7v8H15z"/><path stroke="#d4cfac" stroke-width="5" d="M26 14 44 4"/><path stroke="#858979" stroke-width="3" stroke-dasharray="5 3" d="M6 39h36"/></svg>', key: '5' },
-  { kind: 'demolition', name: 'DEMOLITION TRUCK', cost: 250, icon: '<svg viewBox="0 0 48 48"><path fill="#252b24" d="M3 29h42v12H3z"/><path fill="#6484bc" d="M3 20h12l5 10H3z"/><path fill="#b74f32" d="M21 12h22v21H21z"/><path fill="#e9c76a" d="m24 14 5 5-5 5 5 5h6l-5-5 5-5-5-5zm12 0 5 5-5 5 5 5h2V14z"/><path fill="#cbd1ac" d="M6 22h7l3 6H6z"/><circle fill="#161e1b" cx="11" cy="37" r="6"/><circle fill="#161e1b" cx="36" cy="37" r="6"/></svg>', key: '7' },
-  { kind: 'collector', name: 'ORE COLLECTOR', cost: 200, icon: '<svg viewBox="0 0 48 48"><path fill="#252b24" d="M3 29h42v13H3z"/><path fill="#a2aa7d" d="M4 16h27v18H4z"/><path fill="#6484bc" d="M31 22h9l5 7v5H31z"/><path fill="#e9bd4c" d="m8 15 5-8 7 4 5-6 4 10z"/><path fill="#cbd1ac" d="M34 24h5l3 5h-8z"/><circle fill="#161e1b" cx="12" cy="37" r="6"/><circle fill="#161e1b" cx="36" cy="37" r="6"/></svg>', key: '6' },
+  { kind: 'soldier', short: 'RIFLE', name: 'RIFLE INFANTRY', cost: 60, icon: '<svg viewBox="0 0 48 48"><path fill="#c9b286" d="M18 15h13v13H18z"/><path fill="#6484bc" d="M13 17q0-15 11-15t12 15zM8 44V31l11-6h11l10 6v13z"/><path fill="#243126" d="M18 28h4v16h-4zm10 0h4v16h-4z"/><path stroke="#d5c69d" stroke-width="4" d="m8 39 34-12"/></svg>', key: '3' },
+  { kind: 'rocket', short: 'ROCKET', name: 'ROCKET TROOPER', cost: 90, icon: '<svg viewBox="0 0 48 48"><path fill="#252b24" d="M15 36h7v10h-7zm10 0h7v10h-7z"/><path fill="#5f6b72" d="M12 20h22v18H12z"/><path fill="#6484bc" d="M9 18h9v6H9zm19 0h9v6h-9zM15 25h16v7H15z"/><path fill="#56646c" d="M17 7h12v12H17z"/><path fill="#ffa040" d="M18 11h10v3H18z"/><path fill="#55603c" d="M26 9h20v10H26z"/><path fill="#d8392a" d="M42 10h4v3h-4zm0 5h4v3h-4z"/></svg>', key: '4' },
+  { kind: 'tank', short: 'TANK', name: 'SIEGE TANK', cost: 150, icon: '<svg viewBox="0 0 48 48"><path fill="#252b24" d="M3 30h42v13H3z"/><path fill="#858979" d="M8 35h4v4H8zm8 0h4v4h-4zm8 0h4v4h-4zm8 0h4v4h-4zm8 0h4v4h-4z"/><path fill="#8c9aa1" d="M4 24h36l6 6H4z"/><path fill="#6484bc" d="M3 29h42v3H3z"/><path fill="#8c9aa1" d="m12 23 3-8h15l4 8z"/><path fill="#6484bc" d="M14 15h17v3H14z"/><path stroke="#c9c6b0" stroke-width="2.5" d="M30 16 46 9M30 20l16-6"/></svg>', key: '5' },
+  { kind: 'demolition', short: 'DEMO', name: 'DEMOLITION TRUCK', cost: 250, icon: '<svg viewBox="0 0 48 48"><path fill="#252b24" d="M2 32h44v5H2z"/><path fill="#6484bc" d="M2 17h12v15H2z"/><path fill="#1c2a33" d="M3 19h6v6H3z"/><rect fill="#e3b437" x="16" y="14" width="30" height="17" rx="8"/><path fill="#3a2f27" d="M21 14h3v17h-3zm16 0h3v17h-3z"/><path fill="#b5301f" d="M29 14h3v17h-3z"/><path fill="#ff6b28" d="M6 14h4v3H6z"/><circle fill="#161e1b" cx="9" cy="38" r="5"/><circle fill="#161e1b" cx="27" cy="38" r="5"/><circle fill="#161e1b" cx="39" cy="38" r="5"/></svg>', key: '7' },
+  { kind: 'collector', short: 'HARVEST', name: 'ORE COLLECTOR', cost: 200, icon: '<svg viewBox="0 0 48 48"><path fill="#252b24" d="M5 32h38v12H5z"/><path fill="#858979" d="M9 36h4v4H9zm8 0h4v4h-4zm8 0h4v4h-4zm8 0h4v4h-4z"/><path fill="#8c9aa1" d="M16 12h28l-2 20H18z"/><path fill="#6484bc" d="M15 10h30v3H15z"/><path fill="#e9bd4c" d="m19 12 5-6 6 3 5-5 5 8z"/><path fill="#6484bc" d="M6 18h10v12H6z"/><path fill="#1c2a33" d="M8 20h7v4H8z"/><path fill="#e3b437" d="M0 44 6 34h3l-4 10z"/></svg>', key: '6' },
 ];
 let game, renderer, snapshot, lastTime = 0, ended = false, paused = false, demo = false;
 const debugEnabled = BUILD_INFO.development && typeof GameBridge.prototype.debug_snapshot === 'function';
@@ -53,6 +54,7 @@ function beginMatch(isDemo = false) {
   ended = false;
   paused = false;
   lastTime = 0;
+  resetHud();
   $('main-menu').hidden = true;
   $('app').hidden = false;
   $('app').classList.toggle('demo-mode', demo);
@@ -61,8 +63,7 @@ function beginMatch(isDemo = false) {
   $('spectator-note').hidden = !demo;
   $('match-label').textContent = `${difficulty.toUpperCase()} · ${demo ? 'AI VS AI' : 'YOUR COMMAND'}`;
   $('restart').textContent = demo ? 'WATCH AGAIN' : 'PLAY AGAIN';
-  document.querySelector('.topbar').inert = false;
-  document.querySelector('.layout').inert = false;
+  setHudInert(false);
   try {
     if (!renderer) renderer = new BattlefieldRenderer($('scene'), onSelect, cancelTraining, ejectGarrisoned);
     renderer.reset();
@@ -73,6 +74,10 @@ function beginMatch(isDemo = false) {
     abortMatch();
     $('menu-status').textContent = 'Unable to render the battlefield. Check that WebGL is available, then try again.';
   }
+}
+// Everything in the HUD except the pause dialog goes inert while paused.
+function setHudInert(value) {
+  for (const element of $('app').children) if (element.id !== 'pause-screen') element.inert = value;
 }
 function abortMatch() {
   debugRecorder = null;
@@ -95,15 +100,21 @@ function setPaused(value) {
   paused = value;
   lastTime = 0;
   $('pause-screen').hidden = !paused;
-  document.querySelector('.topbar').inert = paused;
-  document.querySelector('.layout').inert = paused;
+  setHudInert(paused);
   if (!paused) renderer.lastFrame = performance.now();
   refresh();
   $(paused ? 'resume' : 'pause').focus();
 }
 
+// Sidebar cameos follow the hotkey order; the anti-tank pads are static markup.
+const cameoOrder = ['soldier', 'rocket', 'tank', 'collector', 'demolition'];
 function createProduction() {
-  $('production').innerHTML = specs.map(s => `<button type="button" class="unit-card" id="train-${s.kind}" title="Queue ${s.name} (${s.key})${s.kind === 'collector' ? ' — automatically mines ore and delivers credits to your refinery' : s.kind === 'demolition' ? ' — 6s build, 140 HP. Explodes on attack or death: up to 450 damage, radius 7, damages allies. One fielded or queued.' : ''}"><span class="unit-art" aria-hidden="true">${s.icon}</span><span class="unit-info"><strong>${s.name}</strong>${s.kind === 'demolition' ? '<small id="demolition-status">FRIENDLY FIRE · LIMIT 1</small>' : ''}</span><span class="unit-cost">◆ ${s.cost}</span></button>`).join('') + '<div class="economy-note"><span id="economy-status"></span><span>Collectors mine ore. Demo trucks explode on attack or death, damaging allies too. One per player.</span></div>';
+  const notes = {
+    collector: ' — automatically mines ore and delivers credits to your refinery',
+    demolition: ' — 6s build, 140 HP. Waits ahead of your line and strikes groups near it; Send it to hit the best target anywhere. Explodes when it strikes or is destroyed: up to 450 damage, radius 7, damages allies. One fielded or queued.',
+  };
+  const html = cameoOrder.map(kind => specs.find(s => s.kind === kind)).map(s => `<button type="button" class="cameo" id="train-${s.kind}" title="Queue ${s.name}, ${s.cost} credits (${s.key})${notes[s.kind] || ''}">${s.icon.replace('<svg', '<svg class="cameo-icon" aria-hidden="true"')}<span class="cameo-progress" aria-hidden="true"></span><span class="cameo-key" aria-hidden="true">${s.key}</span><span class="cameo-name">${s.short}</span><small class="cameo-cost">${s.cost}</small><span class="cameo-badge" hidden></span>${s.kind === 'demolition' ? '<span id="demolition-status" class="cameo-flag">1×</span>' : ''}</button>`).join('');
+  $('production').insertAdjacentHTML('afterbegin', html);
   for (const s of specs) $(`train-${s.kind}`).addEventListener('click', () => train(s.kind));
 }
 function cancelTraining(building, index) {
@@ -133,6 +144,83 @@ function onSelect(id, additive, touch) {
   }
   refresh();
 }
+function setText(element, text) { if (element.textContent !== text) element.textContent = text; }
+
+// EVA-style status line: derived from snapshots only, it never affects the match.
+const onlineGuns = new Set();
+let lastUnitCount = null, statusTimer = 0;
+function announce(message) {
+  const status = $('hud-status');
+  status.textContent = message;
+  status.hidden = false;
+  clearTimeout(statusTimer);
+  statusTimer = setTimeout(() => { status.hidden = true; }, 2200);
+}
+function resetHud() {
+  onlineGuns.clear();
+  lastUnitCount = null;
+  clearTimeout(statusTimer);
+  $('hud-status').hidden = true;
+}
+
+// Radar: a top-down plot of the field with the camera footprint. North (hostile) is up.
+const RADAR_HALF_X = 26, RADAR_HALF_Z = 56;
+const radarCorner = new Vector3(), radarForward = new Vector3();
+function drawRadar() {
+  const canvas = $('radar');
+  const cssWidth = canvas.clientWidth, cssHeight = canvas.clientHeight;
+  if (!snapshot || !cssWidth || !cssHeight) return;
+  const ratio = Math.min(devicePixelRatio || 1, 2);
+  const width = Math.round(cssWidth * ratio), height = Math.round(cssHeight * ratio);
+  if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+  const ctx = canvas.getContext('2d');
+  // Stretched to fill the box: a radar reads positions, not exact proportions.
+  const sx = width / (RADAR_HALF_X * 2), sz = height / (RADAR_HALF_Z * 2), scale = Math.min(sx, sz);
+  const px = x => width / 2 + x * sx, pz = z => height / 2 + z * sz;
+  ctx.fillStyle = '#0f1a13';
+  ctx.fillRect(0, 0, width, height);
+  ctx.strokeStyle = 'rgba(86,224,106,.12)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let i = 1; i < 4; i++) { const x = Math.round(width * i / 4) + .5, y = Math.round(height * i / 4) + .5; ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.moveTo(0, y); ctx.lineTo(width, y); }
+  ctx.stroke();
+  ctx.fillStyle = '#c9a43a';
+  for (const deposit of snapshot.ore) {
+    if (deposit.amount <= 0) continue;
+    const size = Math.max(1.5 * ratio, (.6 + 1.2 * deposit.amount / deposit.max_amount) * scale);
+    ctx.fillRect(px(deposit.x) - size / 2, pz(deposit.z) - size / 2, size, size);
+  }
+  const colors = { player: '#4a8be6', enemy: '#d4342a' };
+  for (const building of snapshot.buildings) {
+    if (building.hp <= 0) continue;
+    const size = building.kind === 'emplacement' ? 1.8 : 4.2;
+    const w = Math.max(3 * ratio, size * sx), h = Math.max(3 * ratio, size * sz);
+    ctx.fillStyle = colors[building.team];
+    ctx.fillRect(px(building.x) - w / 2, pz(building.z) - h / 2, w, h);
+  }
+  const dot = Math.max(2, Math.round(1.6 * ratio));
+  for (const unit of snapshot.units) {
+    if (unit.hp <= 0 || unit.state === 'garrison') continue;
+    ctx.fillStyle = selected.has(unit.id) ? '#ffffff' : colors[unit.team];
+    ctx.fillRect(Math.round(px(unit.x) - dot / 2), Math.round(pz(unit.z) - dot / 2), dot, dot);
+  }
+  // Camera footprint on the ground plane.
+  const camera = renderer?.camera;
+  if (!camera) return;
+  camera.getWorldDirection(radarForward);
+  ctx.strokeStyle = '#e8ebed';
+  ctx.lineWidth = Math.max(1, ratio);
+  ctx.beginPath();
+  [[-1, -1], [1, -1], [1, 1], [-1, 1]].forEach(([x, y], index) => {
+    radarCorner.set(x, y, -1).unproject(camera);
+    const t = -radarCorner.y / radarForward.y;
+    const gx = px(radarCorner.x + radarForward.x * t), gz = pz(radarCorner.z + radarForward.z * t);
+    if (index) ctx.lineTo(gx, gz); else ctx.moveTo(gx, gz);
+  });
+  ctx.closePath();
+  ctx.stroke();
+}
+
 function refresh() {
   if (!game) return;
   snapshot = JSON.parse(game.snapshot());
@@ -147,7 +235,7 @@ function refresh() {
     $(mode).classList.toggle('active', snapshot.mode === mode);
     $(mode).setAttribute('aria-pressed', String(snapshot.mode === mode));
   }
-  $('selected-count').textContent = String(selected.size).padStart(2, '0');
+  $('selected-count').textContent = String(selected.size);
   $('send-selected').disabled = !selected.size || !canCommand() || snapshot.mode === 'retreat';
   const refinery = snapshot.buildings.some(b => b.team === 'player' && b.kind === 'refinery');
   const collectors = snapshot.units.filter(u => u.team === 'player' && u.kind === 'collector').length;
@@ -155,13 +243,22 @@ function refresh() {
   $('economy-status').textContent = `${collectors} COLLECTOR${collectors === 1 ? '' : 'S'} · REFINERY ${refinery ? 'ONLINE' : 'LOST'}${sheltered ? ` · ${sheltered} INSIDE` : ''}`;
   const demolitionQueued = snapshot.factory_queue.includes('demolition');
   const demolitionAlive = snapshot.units.some(u => u.team === 'player' && u.kind === 'demolition');
-  $('demolition-status').textContent = demolitionAlive ? 'ACTIVE · LIMIT 1' : demolitionQueued ? 'QUEUED · LIMIT 1' : 'FRIENDLY FIRE · LIMIT 1';
+  setText($('demolition-status'), demolitionAlive ? 'ACTIVE' : demolitionQueued ? 'QUEUED' : '1×');
   for (const s of specs) {
     const building = ['tank', 'collector', 'demolition'].includes(s.kind) ? 'factory' : 'barracks';
     const queue = building === 'factory' ? snapshot.factory_queue : snapshot.barracks_queue;
     const producer = snapshot.buildings.find(b => b.team === 'player' && b.kind === building && b.hp > 0);
     const occupants = snapshot.units.filter(u => u.team === 'player' && u.hp > 0 && u.state === 'garrison' && u.garrison === producer?.id).length;
-    $(`train-${s.kind}`).disabled = !canCommand() || snapshot.credits < s.cost || queue.length + occupants >= 9 || (s.kind === 'demolition' && (demolitionAlive || demolitionQueued)) || (s.kind === 'collector' && !refinery) || !producer;
+    const cameo = $(`train-${s.kind}`);
+    cameo.disabled = !canCommand() || snapshot.credits < s.cost || queue.length + occupants >= 9 || (s.kind === 'demolition' && (demolitionAlive || demolitionQueued)) || (s.kind === 'collector' && !refinery) || !producer;
+    // Badge: how many of this unit are queued. The head of a queue shows a build sweep.
+    const queued = queue.filter(kind => kind === s.kind).length;
+    const badge = cameo.querySelector('.cameo-badge');
+    badge.hidden = !queued;
+    setText(badge, String(queued));
+    const head = queue[0] === s.kind;
+    cameo.classList.toggle('is-building', head);
+    if (head) cameo.style.setProperty('--progress', Math.min(1, snapshot[`${building}_progress`] || 0));
   }
   for (const [team, prefix] of [['player', 'friendly'], ['enemy', 'enemy']]) {
     const units = snapshot.units.filter(u => u.team === team);
@@ -174,13 +271,20 @@ function refresh() {
   for (const slot of [0, 1]) {
     const gun = snapshot.buildings.find(b => b.team === 'player' && b.defense_slot === slot);
     const button = $(`defense-${slot}`);
+    const online = !!gun && gun.construction_remaining <= 0;
+    const building = !!gun && gun.construction_remaining > 0;
     button.disabled = !canCommand() || !!gun || !command || snapshot.credits < 200;
-    button.classList.toggle('online', !!gun && gun.construction_remaining <= 0);
-    button.classList.toggle('building', !!gun && gun.construction_remaining > 0);
-    button.querySelector('small').textContent = gun
-      ? gun.construction_remaining > 0 ? `BUILDING · ${Math.ceil(gun.construction_remaining)}s` : `ONLINE · ${Math.ceil(gun.hp)} HP`
-      : command ? '◆ 200 · BUILD' : 'COMMAND LOST';
+    button.classList.toggle('online', online);
+    button.classList.toggle('is-building', building);
+    if (building) button.style.setProperty('--progress', Math.max(0, Math.min(1, 1 - gun.construction_remaining / 8)));
+    setText(button.querySelector('.cameo-cost'), online ? 'ONLINE' : building ? `${Math.ceil(gun.construction_remaining)}s` : command ? '200' : 'LOST');
+    if (online && !onlineGuns.has(slot) && !demo) announce('CONSTRUCTION COMPLETE');
+    if (online) onlineGuns.add(slot); else onlineGuns.delete(slot);
   }
+  const playerUnits = snapshot.units.filter(u => u.team === 'player').length;
+  if (lastUnitCount !== null && playerUnits > lastUnitCount && !demo) announce('UNIT READY');
+  lastUnitCount = playerUnits;
+  drawRadar();
   if (!paused) renderer.update(snapshot, selected);
   $('pause').disabled = snapshot.outcome !== 'playing';
   if (snapshot.outcome !== 'playing' && !ended) {

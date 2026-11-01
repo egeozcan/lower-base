@@ -26,12 +26,12 @@ The main menu offers **Easy**, **Medium** (default), and **Hard** AI difficulty,
 
 - **Easy** reacts slowly, uses a predictable army mix, and sends small patrols with long gaps. A forgiving opponent for learning the game.
 - **Medium** uses the original adaptive production, regular attack waves, and defensive regrouping strategy.
-- **Hard** switches between pressure, economic expansion, anti-armor, anti-infantry, defense, and finishing plans as battlefield conditions change. It weighs both damage and survivability when building counters, holds unfavorable engagements unless longer-ranged attackers are picking off its defensive line, reinforces successful pushes, and releases sheltered defenders when the base is breached. Against opening rushes it holds the firing line and restores mining income before a decisive counterattack. It can build and immediately send a demolition truck against an unopposed wave when the blast can be delivered safely. Each match varies its opening, risk tolerance, plan duration, production ties, and assault timing; the same seed remains reproducible.
+- **Hard** switches between pressure, economic expansion, anti-armor, anti-infantry, defense, and finishing plans as battlefield conditions change. It weighs both damage and survivability when building counters, holds unfavorable engagements unless longer-ranged attackers are picking off its defensive line, reinforces successful pushes, and releases sheltered defenders when the base is breached. Against opening rushes it holds the firing line and restores mining income before a decisive counterattack. It answers a massed rifle army that has no tanks and few rockets with a demolition truck, sends trucks on their own only for strikes worth more than their price, and can build and immediately send one against an unopposed wave when the blast can be delivered safely. Each match varies its opening, risk tolerance, plan duration, production ties, and assault timing; the same seed remains reproducible.
 
 At equal spending, **rifles beat rocket troopers, rockets beat tanks, and tanks
 beat rifles**. Rocket hits deal 78 damage to tanks; tank shells deal 18 damage to
-rocket troopers and 34 to rifles. Damage to buildings and demolition-truck targets
-is unchanged. Keep the units that counter the enemy force protected by a mixed army.
+rocket troopers and 34 to rifles. Damage to buildings is unchanged. Keep the units
+that counter the enemy force protected by a mixed army.
 
 All difficulties play fairly: both sides start with 500 credits, earn 24 passive credits per second, and have a 2,000-credit cap. Unit costs, build times, movement, combat, mining, and queue limits are identical. The whole battlefield is visible to both sides; AI decisions cannot inspect opposing production queues or sheltered units. Difficulty changes the commander's decisions, never its resources or unit stats. The selected difficulty applies to demos and rematches too.
 
@@ -40,7 +40,11 @@ During either a game or demo, **Pause** (or `P`) freezes the battlefield, produc
 - Queue rifle infantry and rocket troopers at the barracks, and tanks, demolition trucks, or ore collectors at the factory. Credits replenish over time; collectors bring in additional income.
 - **Anti-tank defenses:** each base has two fixed pads, left and right, marked by rings ahead of the production buildings. Use the defense buttons or `8` / `9` to build a gun for **200 credits**. Construction takes **8 seconds**, independently of unit queues; the gun is vulnerable and cannot fire while building. Completed guns have **320 HP**, range **16**, and fire every **2.2 seconds** for **100 damage against tanks**, 50 against trucks/collectors, and only 8 against infantry. They prioritize armor and turn slowly. Rifle infantry deal double their usual building damage against these guns, so protect them with troops. Destroyed guns can be rebuilt for full cost while your command center stands. Empty pads do not count toward victory. Both sides use identical rules; Medium and Hard prepare defenses against visible massed armor.
 - Each producing building has **9 shared slots for queued and garrisoned units**, shown above it in a 3×3 grid of rounded unit icons. Garrisoned units have blue backgrounds and a check mark; click one to eject it and free its slot. Ejected combat units gather at the rally area during Retreat, while collectors begin mining. Click a queued unit to cancel it and refund its cost (up to the credit cap). Canceling the active unit resets production progress; canceling a waiting unit preserves it.
-- **Demolition Truck** costs 250 credits and takes 6 seconds at the factory. Only one may be alive or queued per side; its slot opens after it explodes. It has 140 HP, moves slightly faster than a tank, and detonates at close range or when destroyed. The blast deals 450 damage within 2 units, falling linearly to zero at radius 7. It damages **all units and buildings, including allies**, and can trigger other trucks. Building damage uses the nearest edge of the footprint. Send it separately from your troops: rockets can stop it at range, tanks survive near the outer edge of the blast, and a full-health building survives even a direct blast. The AI occasionally fields one against large infantry armies and builds extra rockets against yours.
+- **Demolition Truck** costs 250 credits and takes 6 seconds at the factory. Only one may be alive or queued per side; its slot opens after it explodes. It has 140 HP, moves slightly faster than a tank, and explodes when it strikes or is destroyed. The blast deals 450 damage within 2 units, falling linearly to zero at radius 7. It damages **all units and buildings, including allies**, and can trigger other trucks. Building damage uses the nearest edge of the footprint; a full-health building survives even a direct blast.
+  - A waiting truck parks on its own post, 8 units in front of your rally area and beyond blast reach of the troops there. It strikes enemies that come within 13 units of the post when the blast is worth at least its price, or for less once it comes under fire.
+  - **Send** it to strike anywhere. It drives at the target where a blast would destroy the most credits, allowing for the fire it would take on the way in, and goes off once it has all it can get there, such as when the target's escorts block its way. It passes lone units for groups, finishes damaged buildings rather than chipping healthy ones, and destroys anti-tank guns outright. It never sets itself off where it would destroy more of your own side than of the enemy's, but a truck destroyed by enemy fire explodes where it is.
+  - Rifles fire too late to stop a charging truck. Rocket hits deal 30 damage to it, so it takes the first volley of five rockets, or of rockets and tanks together, to destroy it before it closes. Tanks survive near the outer edge of the blast.
+  - Medium occasionally fields one against large infantry armies. Hard fields one as soon as it sees a massed rifle army with no tanks and few rockets. Both send trucks on their own, never with an attack wave, and build extra rockets against yours.
 - Both sides start with a refinery. Ore fields are randomly generated each match with equal amounts and positions rotated 180 degrees between the bases. Build an **Ore Collector** for 200 credits; it automatically mines ore and delivers up to 100 credits per trip to your refinery. Ore depletes as it is mined, and collectors move on to the next field.
 - Collectors are unarmed and mine independently once deployed. Each works one ore field until it runs out, chosen by driving distance to the refinery. Collectors spread across both flanks of the base so they do not meet head-on in the narrow gaps beside the factory and barracks. A collector whose field runs out mid-load fills up at another field when that is worth the detour. Collectors completed during Retreat wait inside the factory until Gather or Attack releases them. Protect them and your refinery to keep ore income flowing. The opposing commander also builds collectors.
 - Click a gathered unit to select it; Shift-click to add or remove units. On touchscreens, tap units to toggle their selection. Tap empty ground to clear it. Use **Send** to commit the selected units.
@@ -209,12 +213,16 @@ cargo run --release --features ai-bench --bin ai-bench -- 16 0 360 tank-opening
 python3 scripts/compare-ai-bench.py before.json after.json \
   --require-balanced-identical --require-rush-improvement
 
+# Demolition-truck strikes and line defenses, with commanders disabled.
+cargo run --release --features ai-bench --bin ai-bench -- --trucks
+
 # Optional per-side army, economy, queue and strategy traces go to stderr.
 AI_BENCH_TRACE=1 cargo run --release --features ai-bench --bin ai-bench -- 1 26 180 all
 ```
 
 JSON on stdout records every seed, side, scenario, actual win/loss or timeout,
-match duration, surviving army value and plan selections. The plan counters are
+match duration, surviving army value, plan selections, and what Hard's truck
+blasts destroyed net of its own losses (`hard_truck_net`). The plan counters are
 ordered: pressure, economy, anti-armor, anti-infantry, defend, finish. Progress and
 traces use stderr. Timeouts count as draws, regardless of remaining material.
 Both commanders decide every 0.5 simulated seconds and share the real production,
@@ -373,7 +381,8 @@ matrix makes the counter cycle decisive:
 | Tank | 34 | **18** (was 34) | 28 |
 
 Costs, health, ranges, speed, reload times, income and building damage are
-unchanged. Rocket damage to collectors and demolition trucks remains 52. These
+unchanged. Rocket damage to collectors and demolition trucks remains 52 (later
+lowered to 30 against trucks; see [Demolition trucks](#demolition-trucks)). These
 values apply to human and computer units at every difficulty.
 
 `cargo run --release --features ai-bench --bin ai-bench -- --balance` runs 72
@@ -485,3 +494,97 @@ Local validation reports are `output/mixed-wave/heldout-before.json`,
 `output/mixed-wave/final-validation-after.json`, and
 `output/mixed-wave/final-validation-comparison.json`. Development comparisons and
 rejected probes are retained separately in that ignored directory.
+
+### Demolition trucks
+
+Trucks used to drive at the nearest enemy and go off within 3 units of
+whatever they met first. They waited in a rally-grid place among their own
+troops, so a stray rifleman or a rocket volley set them off in their own line,
+and the Hard and Medium commanders sent them along with attack waves.
+
+Trucks now plan their strikes in `src/demolition.rs`. A blast is valued in
+credits: enemy units by cost and health removed, gun emplacements by price,
+and other structures at a quarter credit per hit point, or the original half
+credit per hit point more when the blast destroys them. Own losses are
+subtracted. Each candidate target is scored by a straight drive at it,
+stopping at the first enemy body in the way, under fire from every weapon in
+range that would choose the truck over the targets it already has, using the
+same preferences as combat. Rockets prefer tanks, tanks prefer rifles and
+rifles prefer rockets, so a truck that arrives while the enemy is busy with
+your troops takes less fire. A truck goes off once its blast is as large as
+it can get at the target, or after 0.3 seconds without improvement, such as
+when escorts block the way. It never goes off where the blast is worth less
+to it than nothing. A truck destroyed on the way still explodes where it is.
+
+Rocket damage to trucks fell from 52 to 30. Three rockets could stop any
+charge before; now it takes the first volley of five rockets, or of rockets
+and tanks together. Rifles fire too late, so massed rifles are the target a
+truck is for.
+
+`ai-bench --trucks` runs the real simulation with commanders disabled. Strikes
+send a truck from where it waits at an army in its own rally area; defenses
+let a wave walk into a seven-unit line that spent 250 credits on a truck or on
+troops. Net is enemy losses minus our own, with the truck counted as spent.
+Defense scores include the base damage after the line falls.
+
+| Situation | Old truck net | New truck net |
+| --- | ---: | ---: |
+| Eight waiting rifles | -70 | -4 |
+| Twelve waiting rifles | -21 | 46 |
+| Ten waiting, mixed with two rockets and a tank | -108 | 131 |
+| Four rockets with four rifles | -40 | 50 |
+| Three tanks with five rifles | 20 | -9 |
+| Two rifles (strikes a building instead) | -130 | 58 |
+| Anti-tank gun with two rifles | -130 | 70 |
+
+| Wave against the line | Old truck | New truck | Tank and rifle | Four rifles |
+| --- | ---: | ---: | ---: | ---: |
+| Ten rifles | -969 | **350** | -57 | -855 |
+| Six rifles, two rockets, a tank | -2522 | **-1579** | -1694 | -2489 |
+| Three tanks, two rifles, a rocket | -1983 | **-1002** | -2198 | -1829 |
+
+Waiting reserves are spread over the 3.4 × 2.2 rally grid, so a truck sent at
+them only about breaks even; advancing waves are packed and are the better
+target. The old truck was the worst way to spend 250 credits on a defense;
+the new one is the best in all three.
+
+Hard now fields a truck as soon as it sees at least eight rifles with no tanks
+and at most one rocket per four rifles, unless it is already under attack. It
+sends a waiting truck alone once a strike from where it stands is worth more
+than 300 credits, or at once to intercept an unopposed wave as before, and
+never as part of a wave. Medium keeps its own rule for building trucks but
+also sends them alone. Tournament results against frozen stock Hard and the
+scripted players, at 300 seconds:
+
+| Seeds | Scenarios | Before | After |
+| --- | --- | ---: | ---: |
+| 0–31 | stock | 244/320 | 272/320 |
+| 32–63 | stock | 240/320 | 269/320 |
+| 100–107 | all | 299/352 | 306/352 |
+| 200–231 | all | 1220/1408 | 1246/1408 |
+| 500–563 (held out) | stock | 494/640 | 545/640 |
+| 600–663 (held out) | stock | 499/640 | 546/640 |
+| 400–431 (held out) | all | 1202/1408 | 1231/1408 |
+| 700–731 (held out) | all | 1216/1408 | 1243/1408 |
+
+Every gain is in the ten-rifle start, which Hard now wins in all 592 games
+across these sets (previously 347). A truck blast there nets about 465 credits
+for its price of 250, and at least 370 in every match; `hard_truck_net` records
+this per match. Every other scenario is unchanged except one held-out
+scarce-ore match (seed 518, Hard as the southern player), lost after both
+versions built the same interception truck at the same moment and it went off
+1.3 units from where the old one did. Medium's results against the same opponents are unchanged. The balance
+and traffic benchmarks are byte-identical.
+
+Rejected probes:
+
+- Buying a waiting truck whenever the opponent has six infantry and at most
+  one tank: the ten-rifle start fell from 38 to 3 of 64 wins (seeds 200–231).
+  The truck took the factory slot of the second tank just before the first
+  rifle wave.
+- Buying a truck whenever a strike from its post looked worth 400 or 500
+  credits: most such targets were collectors and buildings at the enemy base,
+  which had moved or gained escorts by the time a truck got there. Blasts
+  averaged well below the truck's price and wins fell to 1157/1408.
+- Counting own losses double: no effect on the lost held-out match, and it
+  lost another.

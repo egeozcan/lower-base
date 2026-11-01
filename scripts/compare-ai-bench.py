@@ -19,6 +19,7 @@ def read_report(path):
         # Older tournament reports predate demolition telemetry.
         result.setdefault("hard_demolition_built", 0)
         result.setdefault("explosions", 0)
+        result.setdefault("hard_truck_net", 0.0)
         key = (result["seed"], result["hard_team"], result["scenario"])
         if key in indexed:
             raise ValueError(f"duplicate match: {key}")

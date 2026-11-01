@@ -381,111 +381,157 @@ function unitMesh(u) {
     addPart(new THREE.BoxGeometry(w, h, d), material, x, y, z, rx, ry, rz);
   const drum = (r1, r2, h, x, y, z, material, rx = 0, ry = 0, rz = 0, segments = 8) =>
     addPart(new THREE.CylinderGeometry(r1, r2, h, segments), material, x, y, z, rx, ry, rz);
+  // Each unit has its own silhouette: tracked harvester, drum-carrying truck,
+  // twin-gun tank, light rifleman and an armored rocket trooper. Faction paint
+  // is cool steel for the player and rust iron for the enemy, with bold stripes.
+  const player = u.team === 'player';
+  const hullMat = mat(player ? 0x8c9aa1 : 0x86705a), hullDark = mat(player ? 0x56646c : 0x5a4636);
+  const stripe = mat(0xe8e2c8), glass = mat(0x1c2a33, 0x3d6f86, .35), hazard = mat(0xe3b437), rust = mat(0x3a2f27);
+  const track = (x, length, y, height, width, wheel) => {
+    plate(width, height, length, x, y, 0, shadow);
+    plate(width + .04, .08, length - .1, x, y + height / 2, 0, metal);
+    for (let z = -length / 2 + .3; z < length / 2 - .2; z += .34) plate(width + .06, .07, .12, x, y + height / 2 + .05, z, dark);
+    for (let z = -length / 2 + .45; z < length / 2 - .3; z += (length - .9) / 4) drum(wheel, wheel, .1, x + Math.sign(x) * (width / 2 + .02), y - .02, z, metal, 0, 0, Math.PI / 2, 10);
+  };
   if (u.kind === 'collector') {
-    // A civilian mining truck: broad wheels, open hopper and front scoop.
-    plate(2.4, .4, 3.8, 0, .65, 0, shadow);
-    for (const x of [-1.2, 1.2]) {
-      for (const z of [-1.15, 1.15]) {
-        drum(.58, .58, .45, x, .55, z, shadow, 0, 0, Math.PI / 2, 10);
-        drum(.28, .28, .48, x, .55, z, metal, 0, 0, Math.PI / 2);
-      }
-      plate(.18, .85, 2.25, x * .8, 1.4, .65, armor);
+    // Heavy tracked harvester: front scoop, offset cab and a deep ore hopper.
+    track(-1.22, 4.2, .45, .82, .62, .26);
+    track(1.22, 4.2, .45, .82, .62, .26);
+    plate(1.95, .62, 3.9, 0, 1.0, 0, hullDark);
+    plate(2.9, .14, .85, 0, .42, -2.3, hazard, -.45);
+    for (let x = -1.25; x <= 1.26; x += .36) plate(.12, .1, .3, x, .26, -2.72, metal, -.45);
+    plate(2.3, .5, .55, 0, 1.0, -1.95, shadow);
+    drum(.24, .24, 2.1, 0, .9, -2.05, metal, 0, 0, Math.PI / 2, 10);
+    // Cab on the left, machinery on the right.
+    plate(.95, .85, 1.05, -.52, 1.72, -1.2, glow);
+    plate(.85, .3, .06, -.52, 1.88, -1.74, glass);
+    plate(.06, .3, .7, -1.0, 1.88, -1.2, glass);
+    plate(1.05, .12, 1.15, -.52, 2.2, -1.2, hullMat);
+    plate(.85, .55, .95, .5, 1.58, -1.25, hullMat);
+    for (const z of [-1.55, -1.25, -.95]) plate(.7, .06, .12, .5, 1.87, z, shadow);
+    drum(.09, .11, .9, .78, 2.1, -.95, shadow);
+    drum(.12, .12, .08, .78, 2.56, -.95, rust);
+    // Hopper: flared walls with a faction stripe along the rim.
+    plate(1.7, .1, 2.2, 0, 1.36, .75, shadow);
+    for (const x of [-1, 1]) {
+      plate(.12, .95, 2.3, x * .93, 1.8, .75, hullMat, 0, 0, x * .16);
+      plate(.14, .16, 2.34, x * 1.0, 2.26, .75, glow);
+      for (const z of [.05, .75, 1.45]) plate(.06, .8, .1, x * 1.0, 1.78, z, hullDark, 0, 0, x * .16);
     }
-    plate(2, .18, 2.25, 0, 1, .65, dark);
-    plate(2, .85, .16, 0, 1.4, 1.8, armor);
-    plate(1.9, 1.1, 1.2, 0, 1.5, -1.05, glow);
-    plate(1.5, .45, .1, 0, 1.7, -1.7, mat(0x97b9bf));
-    plate(2.1, .15, 1.4, 0, 2.1, -1.05, armor);
-    plate(2.7, .45, .65, 0, .45, -2.05, mat(0xd4ae45));
-    for (const x of [-.85, .85]) plate(.25, .2, .12, x, 1.15, -1.7, lamp);
+    plate(2, .95, .12, 0, 1.8, 1.88, hullMat);
+    plate(2.1, .16, .14, 0, 2.26, 1.9, glow);
+    plate(2, .95, .12, 0, 1.8, -.38, hullMat);
+    for (const x of [-.6, .6]) plate(.36, .14, .5, x, 1.4, 1.98, stripe);
+    for (const x of [-.85, -.3]) plate(.18, .14, .08, x, 1.45, -1.75, lamp);
   } else if (u.kind === 'demolition') {
-    // Six wheels, a faction-painted cab, and an unmistakable hazard-striped charge.
-    const explosive = mat(0xac4930), warning = mat(0xf0cc51);
-    plate(2.1, .35, 3.6, 0, .65, 0, shadow);
-    for (const x of [-1.05, 1.05]) for (const z of [-1.15, .45, 1.3]) {
-      drum(.48, .48, .35, x, .48, z, shadow, 0, 0, Math.PI / 2, 10);
-      drum(.22, .22, .37, x, .48, z, metal, 0, 0, Math.PI / 2);
+    // Cab-over truck hauling one oversized, unmistakably dangerous drum.
+    plate(2, .32, 3.9, 0, .7, .05, shadow);
+    for (const x of [-1.04, 1.04]) for (const z of [-1.3, .55, 1.4]) {
+      drum(.5, .5, .36, x, .5, z, shadow, 0, 0, Math.PI / 2, 12);
+      drum(.24, .24, .38, x, .5, z, metal, 0, 0, Math.PI / 2);
     }
-    plate(1.85, 1.1, 1.15, 0, 1.3, -1.1, glow);
-    plate(1.5, .4, .08, 0, 1.55, -1.71, mat(0x97b9bf));
-    plate(2, .14, 1.35, 0, 1.91, -1.1, armor);
-    plate(1.8, 1.4, 2.1, 0, 1.5, .65, explosive);
-    for (const x of [-.92, .92]) {
-      plate(.05, .55, 2.1, x, 1.5, .65, warning);
-      for (const z of [-.05, .55, 1.15]) plate(.07, .57, .22, x, 1.5, z, shadow, -.5);
+    plate(2.1, .22, 1.2, 0, .95, -1.3, hullDark);
+    plate(1.9, 1.15, 1.05, 0, 1.6, -1.35, glow);
+    plate(1.65, .45, .08, 0, 1.85, -1.9, glass, .15);
+    plate(1.95, .14, 1.1, 0, 2.22, -1.35, hullMat);
+    plate(1.4, .3, .06, 0, 1.25, -1.9, metal);
+    for (let x = -.55; x <= .56; x += .18) plate(.06, .26, .07, x, 1.25, -1.93, shadow);
+    plate(2.1, .2, .16, 0, .88, -1.98, metal);
+    for (const x of [-.72, .72]) plate(.24, .18, .08, x, 1.23, -1.92, lamp);
+    drum(.14, .14, .18, 0, 2.38, -1.35, mat(0xff6b28, 0xff4a10, 1.4));
+    // Flatbed, cradle and the drum itself.
+    plate(2, .14, 2.5, 0, .95, .62, hullMat);
+    for (const z of [-.25, .62, 1.5]) plate(1.5, .5, .2, 0, 1.2, z, hullDark);
+    drum(.82, .82, 2.3, 0, 1.92, .62, hazard, Math.PI / 2, 0, 0, 14);
+    for (const z of [-.3, .62, 1.54]) drum(.86, .86, .16, 0, 1.92, z, z === .62 ? mat(0xb5301f, 0x5a0d05, .3) : rust, Math.PI / 2, 0, 0, 14);
+    drum(.7, .7, .06, 0, 1.92, 1.79, metal, Math.PI / 2, 0, 0, 14);
+    drum(.12, .12, .04, 0, 1.92, 1.83, rust, Math.PI / 2, 0, 0, 10);
+    // Radiation trefoil on the rear cap.
+    for (let i = 0; i < 3; i++) {
+      const a = i * Math.PI * 2 / 3 + Math.PI / 2;
+      plate(.24, .38, .04, Math.cos(a) * .34, 1.92 + Math.sin(a) * .32, 1.83, rust, 0, 0, a);
     }
-    plate(1.85, .12, 2.15, 0, 2.25, .65, dark);
-    drum(.18, .18, .2, 0, 2.42, .45, mat(0xff6b28, 0xff4a10, 1.2));
-    for (const x of [-.65, .65]) plate(.25, .18, .08, x, 1.05, -1.72, lamp);
+    drum(.08, .08, .5, .5, 2.6, .62, metal, 0, 0, 0, 6);
   } else if (u.kind === 'tank') {
-    // Squat riveted armor, exposed treads and a long conventional cannon.
-    plate(2.2, .5, 3.05, 0, .48, .1, shadow);
-    for (const x of [-1.08, 1.08]) {
-      plate(.56, .68, 3.1, x, .42, .1, shadow);
-      for (let z = -1.2; z < 1.5; z += .32) {
-        plate(.6, .09, .14, x, .78, z, metal);
-        drum(.22, .22, .1, x * 1.26, .4, z, metal, 0, 0, Math.PI / 2);
-      }
-      plate(.6, .12, 3.15, x, .88, .1, armor);
-      plate(.62, .14, .65, x, .98, -.8, glow);
+    // Wedge-nosed heavy tank with team skirts and a twin-gun hexagonal turret.
+    track(-1.1, 3.4, .42, .72, .6, .2);
+    track(1.1, 3.4, .42, .72, .6, .2);
+    plate(1.95, .55, 2.55, 0, .92, .25, hullMat);
+    plate(1.95, .14, 1.05, 0, 1.0, -1.32, hullMat, -.42);
+    plate(1.6, .3, .3, 0, .62, -1.72, hullDark);
+    for (const x of [-1, 1]) {
+      plate(.1, .36, 2.9, x * 1.43, .72, .05, glow);
+      plate(.12, .07, 2.9, x * 1.44, .93, .05, stripe);
     }
-    plate(1.85, .6, 2.5, 0, .91, .1, armor);
-    plate(1.85, .25, .65, 0, 1.07, -1.1, armor, .35);
-    plate(1.7, .08, .75, 0, 1.26, .95, shadow);
-    for (let x = -.65; x <= .65; x += .22) plate(.07, .08, .68, x, 1.32, .95, metal);
-    drum(.72, .9, .26, 0, 1.3, -.08, shadow);
-    for (const x of [-.7, .7]) plate(.2, .13, .08, x, 1.15, -1.45, lamp);
-    // The turret traverses independently: hull follows the route, gun the target.
+    plate(1.5, .1, .8, 0, 1.24, 1.05, shadow);
+    for (let x = -.6; x <= .61; x += .2) plate(.07, .07, .72, x, 1.3, 1.05, metal);
+    for (const x of [-.7, .7]) drum(.1, .12, .35, x, 1.35, 1.45, shadow, .3);
+    for (const x of [-.72, .72]) plate(.22, .14, .08, x, 1.0, -1.82, lamp);
     parts = turret;
-    drum(.83, 1, .55, 0, 1.66, -.1, glow, 0, Math.PI / 8, 0, 8);
-    plate(1.22, .16, 1.15, 0, 1.98, -.1, armor);
-    plate(1.05, .4, .55, 0, 1.68, .82, armor);
-    plate(1.1, .08, .6, 0, 1.92, .82, shadow);
-    for (const x of [-.62, .62]) {
-      plate(.2, .28, .5, x, 1.66, .8, dark);
-      for (const z of [-.62, -.42]) drum(.065, .065, .26, x * 1.05, 1.86, z, shadow, Math.PI / 2.6, 0, 0, 6);
+    drum(.95, 1.1, .5, 0, 1.48, 0, hullMat, 0, Math.PI / 6, 0, 6);
+    drum(1.12, 1.12, .12, 0, 1.3, 0, glow, 0, Math.PI / 6, 0, 6);
+    drum(.82, .95, .12, 0, 1.79, 0, glow, 0, Math.PI / 6, 0, 6);
+    plate(1.2, .42, .55, 0, 1.45, .95, hullMat);
+    plate(1, .5, .42, 0, 1.5, -1.0, hullDark);
+    for (const x of [-.24, .24]) {
+      drum(.1, .12, 2.1, x, 1.52, -2.1, metal, Math.PI / 2);
+      plate(.24, .22, .34, x, 1.52, -3.12, shadow);
     }
-    drum(.28, .28, .13, -.3, 2.1, .05, shadow);
-    drum(.2, .24, .08, -.3, 2.2, .05, metal);
-    plate(.55, .4, .4, 0, 1.68, -.95, armor);
-    drum(.105, .14, 1.95, 0, 1.7, -1.97, metal, Math.PI / 2);
-    drum(.15, .15, .4, 0, 1.7, -1.75, shadow, Math.PI / 2);
-    drum(.17, .17, .28, 0, 1.7, -2.95, shadow, Math.PI / 2);
-    drum(.025, .025, 1.1, .55, 2.45, .35, shadow);
-    plate(.16, .025, .52, .25, 2.08, -.28, mat(0xe6dfbe));
-    plate(.48, .025, .16, .25, 2.09, -.28, mat(0xe6dfbe));
+    drum(.25, .28, .22, .42, 1.95, .25, hullMat);
+    drum(.2, .2, .06, .42, 2.08, .25, shadow);
+    drum(.025, .025, 1.1, -.5, 2.35, .7, shadow);
+    if (player) for (const s of [-1, 1]) plate(.34, .03, .1, -.25 + s * .1, 1.86, -.25, stripe, 0, s * .7);
+    else drum(.2, .2, .03, -.25, 1.86, -.25, stripe, 0, 0, 0, 5);
     parts = hull;
-  } else {
-    // Cloth fatigues, field webbing and a broad steel helmet.
-    for (const x of [-.23, .23]) {
-      plate(.3, .65, .35, x, .48, 0, armor);
-      plate(.34, .23, .52, x, .14, -.08, shadow);
-      plate(.26, .5, .32, x * 2.1, 1.12, -.05, armor, -.3, 0, x < 0 ? -.15 : .15);
-      plate(.26, .19, .25, x * 2.1, .91, -.22, pale);
-      plate(.33, .19, .36, x * 2.1, 1.4, 0, glow);
-    }
-    plate(.73, .7, .5, 0, 1.12, 0, armor);
-    plate(.77, .13, .56, 0, .83, 0, shadow);
+  } else if (u.kind === 'rocket') {
+    // Armored rocket trooper: closed helmet with a glowing visor and a twin-tube pod.
+    const suit = mat(player ? 0x5f6b72 : 0x6b5a4a);
     for (const x of [-.22, .22]) {
-      plate(.12, .55, .06, x, 1.17, -.29, mat(0xc5b387));
-      plate(.23, .22, .15, x, .94, -.34, dark);
+      plate(.34, .62, .38, x, .46, 0, suit);
+      plate(.36, .2, .2, x, .58, -.2, metal);
+      plate(.38, .22, .5, x, .12, -.06, shadow);
     }
-    plate(.56, .5, .27, 0, 1.12, .36, dark);
-    drum(.24, .25, .35, 0, 1.68, -.02, pale);
-    drum(.29, .36, .25, 0, 1.9, 0, glow);
-    drum(.38, .38, .07, 0, 1.79, -.02, glow);
-    if (u.kind === 'rocket') {
-      drum(.22, .22, 1.55, .52, 1.53, -.2, dark, Math.PI / 2);
-      drum(.28, .28, .17, .52, 1.53, -.99, metal, Math.PI / 2);
-      drum(.16, .16, .02, .52, 1.53, -1.09, shadow, Math.PI / 2);
-      plate(.45, .12, .3, .52, 1.76, -.3, mat(0xd7ba53));
-      for (const x of [-.2, .15]) drum(.12, .12, .85, x, 1.2, .48, metal);
-    } else {
-      plate(.16, .18, .9, .4, 1.08, -.42, shadow);
-      plate(.18, .2, .32, .4, 1.08, .04, mat(0x6e4930));
-      drum(.055, .055, .55, .4, 1.1, -1.08, shadow, Math.PI / 2);
-      plate(.12, .27, .18, .4, .88, -.4, metal, -.25);
+    plate(.84, .74, .52, 0, 1.15, 0, suit);
+    plate(.72, .42, .08, 0, 1.22, -.28, glow);
+    plate(.88, .14, .56, 0, .8, 0, shadow);
+    for (const x of [-.52, .52]) {
+      plate(.4, .24, .5, x, 1.5, 0, glow);
+      plate(.26, .55, .3, x * 1.05, 1.1, -.05, suit);
+      plate(.24, .2, .26, x * 1.05, .82, -.18, shadow);
     }
+    plate(.48, .44, .48, 0, 1.78, 0, hullDark);
+    plate(.4, .11, .06, 0, 1.78, -.26, mat(0xffa040, 0xff7a20, 1.6));
+    plate(.52, .1, .52, 0, 2.03, 0, glow);
+    // Launcher pod on the right shoulder, warheads visible from the front.
+    plate(.48, .42, 1.45, .66, 1.82, -.1, mat(0x55603c));
+    plate(.06, .12, 1.1, .92, 1.85, -.05, glow);
+    drum(.1, .14, .25, .66, 1.82, .72, shadow, Math.PI / 2);
+    for (const y of [1.72, 1.92]) {
+      drum(.12, .12, .06, .55 + (y > 1.8 ? .22 : 0), y, -.9, shadow, Math.PI / 2);
+      drum(.08, .08, .12, .55 + (y > 1.8 ? .22 : 0), y, -.9, mat(0xd8392a), Math.PI / 2);
+      drum(.12, .12, .06, .77 - (y > 1.8 ? .22 : 0), y, -.9, shadow, Math.PI / 2);
+    }
+    plate(.5, .5, .26, 0, 1.2, .36, dark);
+  } else {
+    // Light rifleman: slim build, faction vest and helmet, rifle at the ready.
+    for (const x of [-.17, .17]) {
+      plate(.25, .62, .3, x, .45, 0, armor);
+      plate(.28, .2, .42, x, .11, -.06, shadow);
+    }
+    plate(.6, .62, .38, 0, 1.08, 0, armor);
+    plate(.66, .38, .44, 0, 1.16, 0, glow);
+    plate(.64, .1, .42, 0, .8, 0, shadow);
+    for (const x of [-.36, .36]) plate(.18, .5, .22, x, 1.06, -.12, armor, -.6);
+    plate(.42, .44, .22, 0, 1.12, .3, dark);
+    drum(.1, .12, .18, 0, 1.48, .3, metal);
+    drum(.19, .2, .28, 0, 1.58, -.02, pale);
+    drum(.26, .3, .2, 0, 1.78, 0, glow);
+    drum(.34, .34, .05, 0, 1.69, 0, glow);
+    plate(.12, .14, .95, .22, 1.18, -.62, shadow);
+    plate(.13, .12, .32, .22, 1.18, -.2, mat(0x6e4930));
+    plate(.1, .2, .12, .22, 1.03, -.55, metal);
+    drum(.04, .04, .45, .22, 1.2, -1.28, shadow, Math.PI / 2);
+    plate(.2, .16, .16, .22, 1.2, -.85, pale);
   }
   const merge = (source, parent) => {
     for (const [material, geometries] of source) {
@@ -723,7 +769,7 @@ export class BattlefieldRenderer {
         let cargo = null;
         if (isUnit && item.kind === 'collector') {
           cargo = new THREE.Mesh(new THREE.BoxGeometry(1.6, .7, 1.9), mat(0xe5b64a));
-          cargo.position.set(0, 1.45, .65); group.children[0].add(cargo);
+          cargo.position.set(0, 1.78, .75); group.children[0].add(cargo);
         }
         // A generous transparent target keeps individual soldiers easy to click.
         let hitTarget = null;

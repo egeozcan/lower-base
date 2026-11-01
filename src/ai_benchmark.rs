@@ -73,6 +73,9 @@ pub struct MatchResult {
     pub plans: [u32; 6],
     pub hard_demolition_built: usize,
     pub explosions: usize,
+    /// Credits Hard's truck blasts destroyed, minus its own losses to them,
+    /// measured over the 0.05s step of each blast.
+    pub hard_truck_net: f32,
 }
 
 #[derive(serde::Deserialize)]
@@ -276,6 +279,15 @@ fn tank_opening(game: &mut Game, team: Team, scenario: Scenario) {
     }
 }
 
+// Units by health, optionally without trucks: a truck is spent either way.
+fn value(game: &Game, team: Team, trucks: bool) -> f32 {
+    game.units
+        .iter()
+        .filter(|u| u.team == team && (trucks || u.kind != UnitKind::Demolition))
+        .map(|u| u.kind.cost() * u.hp / u.max_hp)
+        .sum()
+}
+
 pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) -> MatchResult {
     let mut game = Game::demo_with_difficulty(seed, Difficulty::Hard);
     match scenario {
@@ -397,6 +409,7 @@ pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) ->
     let mut next_order = 0;
     let mut trucks = std::collections::HashSet::new();
     let mut explosions = std::collections::HashSet::new();
+    let mut hard_truck_net = 0.0;
     let dt = if scripted { 0.05 } else { 0.25 };
     let trace = std::env::var_os("AI_BENCH_TRACE").is_some();
     let ticks = (max_seconds / dt).ceil() as usize;
@@ -485,7 +498,24 @@ pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) ->
             }
             until_decision = Difficulty::Hard.decision_interval();
         }
-        game.update(dt);
+        // Equal to one update of dt; stepping separately isolates blasts.
+        for _ in 0..(dt / 0.05).round() as usize {
+            let truck = game
+                .units
+                .iter()
+                .find(|u| u.team == hard_team && u.kind == UnitKind::Demolition)
+                .map(|u| u.id);
+            let before = (
+                value(&game, opponent, false),
+                value(&game, hard_team, false),
+            );
+            game.update(0.05);
+            if truck.is_some_and(|id| !game.units.iter().any(|u| u.id == id)) {
+                hard_truck_net += before.0
+                    - value(&game, opponent, false)
+                    - (before.1 - value(&game, hard_team, false));
+            }
+        }
         for u in game
             .units
             .iter()
@@ -500,13 +530,6 @@ pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) ->
             break;
         }
     }
-    let value = |team| {
-        game.units
-            .iter()
-            .filter(|u| u.team == team)
-            .map(|u| u.kind.cost() * u.hp / u.max_hp)
-            .sum()
-    };
     MatchResult {
         seed,
         hard_team,
@@ -517,15 +540,12 @@ pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) ->
             Outcome::Defeat => Some(hard_team == Team::Enemy),
         },
         seconds: game.time,
-        hard_surviving_value: value(hard_team),
-        stock_surviving_value: value(if hard_team == Team::Player {
-            Team::Enemy
-        } else {
-            Team::Player
-        }),
+        hard_surviving_value: value(&game, hard_team, true),
+        stock_surviving_value: value(&game, opponent, true),
         plans: game.hard_commanders[if hard_team == Team::Player { 0 } else { 1 }].plans,
         hard_demolition_built: trucks.len(),
         explosions: explosions.len(),
+        hard_truck_net,
     }
 }
 
@@ -558,6 +578,24 @@ mod tests {
             }
         }
         assert!(wins >= 11, "expected at least 11/12 rush wins; got {wins}");
+    }
+
+    #[test]
+    fn hard_breaks_massed_rifle_openings_with_a_truck() {
+        let mut wins = 0;
+        let mut trucks = 0;
+        for seed in [2, 5, 11, 26, 73, 1941] {
+            for team in [Team::Player, Team::Enemy] {
+                let result = play(seed, team, Scenario::Infantry, 300.0);
+                wins += usize::from(result.hard_won == Some(true));
+                trucks += usize::from(result.hard_truck_net > UnitKind::Demolition.cost());
+            }
+        }
+        assert!(wins >= 11, "expected at least 11/12 wins; got {wins}");
+        assert!(
+            trucks >= 11,
+            "trucks must destroy more than they cost; {trucks}/12 did"
+        );
     }
 
     #[test]

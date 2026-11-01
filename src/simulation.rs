@@ -8,6 +8,8 @@ pub mod ai_benchmark;
 #[cfg(any(test, feature = "ai-bench"))]
 #[path = "balance_benchmark.rs"]
 pub mod balance_benchmark;
+#[path = "demolition.rs"]
+mod demolition;
 #[cfg(test)]
 #[path = "emplacement_tests.rs"]
 mod emplacement_tests;
@@ -19,6 +21,9 @@ mod stock_hard;
 #[cfg(any(test, feature = "ai-bench"))]
 #[path = "traffic_benchmark.rs"]
 pub mod traffic_benchmark;
+#[cfg(any(test, feature = "ai-bench"))]
+#[path = "truck_benchmark.rs"]
+pub mod truck_benchmark;
 
 const FIELD_EDGE: f32 = 17.0;
 const QUEUE_LIMIT: usize = 9;
@@ -31,6 +36,11 @@ const EMPLACEMENT_COST: f32 = 200.0;
 const EMPLACEMENT_BUILD_TIME: f32 = 8.0;
 const EMPLACEMENT_HEALTH: f32 = 320.0;
 const EMPLACEMENT_RANGE: f32 = 16.0;
+const EMPLACEMENT_INTERVAL: f32 = 2.2;
+// Command centers provide short-range point defense.
+const COMMAND_RANGE: f32 = 11.0;
+const COMMAND_DAMAGE: f32 = 18.0;
+const COMMAND_INTERVAL: f32 = 1.0;
 // A costly, fragile breaching tool: lethal to clustered infantry, but a tank
 // survives a blast beyond close range and no full-health structure is one-shot.
 const DEMOLITION_RADIUS: f32 = 7.0;
@@ -162,7 +172,10 @@ impl UnitKind {
             // Anti-armor damage must pay for the trooper's low health and
             // slightly shorter range, including at equal total army cost.
             (Self::Rocket, Some(Self::Tank)) => 78.0,
-            (Self::Rocket, Some(Self::Collector | Self::Demolition)) => 52.0,
+            (Self::Rocket, Some(Self::Collector)) => 52.0,
+            // Rifles fire too late to stop a charging truck. It takes the first
+            // volley of five rockets, or of rockets and tanks together.
+            (Self::Rocket, Some(Self::Demolition)) => 30.0,
             (Self::Rocket, Some(Self::Soldier | Self::Rocket)) => 13.0,
             (Self::Rocket, None) => 36.0,
             (Self::Tank, Some(Self::Soldier)) => 34.0,
@@ -232,6 +245,8 @@ pub struct Unit {
     cooldown: f32,
     #[serde(skip)]
     detonated: bool,
+    #[serde(skip)]
+    fuse: demolition::Fuse,
     #[serde(skip)]
     navigation: navigation::Navigation,
     // The ore deposit a collector works, by id, until it runs out or the
@@ -568,16 +583,24 @@ impl Game {
             return;
         }
         let id = self.id();
+        // Trucks wait at their own post, so they take no place in the grid.
         let index = self
             .units
             .iter()
             .filter(|u| {
-                u.team == team && matches!(u.state, UnitState::Gather | UnitState::Garrison)
+                u.team == team
+                    && u.kind != UnitKind::Demolition
+                    && matches!(u.state, UnitState::Gather | UnitState::Garrison)
             })
             .count();
         let x = ((index % 7) as f32 - 3.0) * 3.4;
         let row = (index / 7).min(3) as f32;
         let direction = if team == Team::Player { 1.0 } else { -1.0 };
+        let (rally_x, rally_z) = if kind == UnitKind::Demolition {
+            demolition::post(team)
+        } else {
+            (x, direction * (27.0 + row * 2.2))
+        };
         let mode = self.team_mode(team);
         let shelter = self
             .buildings
@@ -621,10 +644,11 @@ impl Game {
             garrison,
             cooldown: 0.2,
             detonated: false,
+            fuse: demolition::Fuse::default(),
             navigation: navigation::Navigation::default(),
             deposit: None,
-            rally_x: x,
-            rally_z: direction * (27.0 + row * 2.2),
+            rally_x,
+            rally_z,
         });
     }
     pub fn set_mode(&mut self, mode: &str) {
@@ -1035,7 +1059,8 @@ impl Game {
             && (threatened || (wave_timer <= 0.0 && (reserves >= 3 || wave_timer <= -4.0)))
         {
             for u in &mut self.units {
-                if u.team == team && u.state == UnitState::Gather {
+                if u.team == team && u.kind != UnitKind::Demolition && u.state == UnitState::Gather
+                {
                     u.state = UnitState::Attack;
                 }
             }
@@ -1046,6 +1071,8 @@ impl Game {
                 self.demo_wave_timer = next_wave;
             }
         }
+        // Trucks wait at their post and go only for a worthwhile target.
+        self.send_truck(team, ai::TRUCK_STRIKE_VALUE);
 
         // Soldiers counter rockets, rockets counter armor, and tanks counter infantry.
         // A baseline of every role prevents a single small scout from pulling the
@@ -1311,6 +1338,14 @@ impl Game {
             }
             navigation::hold(unit);
             unit.cooldown = (unit.cooldown - dt).max(0.0);
+            // Trucks wait at their post and choose their own targets, also
+            // while their side retreats.
+            if unit.kind == UnitKind::Demolition {
+                if demolition::drive(unit, dt, &snapshot, &buildings) {
+                    detonating.push(unit_index);
+                }
+                continue;
+            }
             let retreating = if unit.team == Team::Player {
                 player_retreat
             } else {
@@ -1355,34 +1390,19 @@ impl Game {
                 })
                 .max_by(|(_, a), (_, b)| {
                     let score = |v: &Unit| {
-                        unit.kind.damage(Some(v.kind))
-                            / (1.0 + distance_sq(unit.x, unit.z, v.x, v.z).sqrt() / range * 0.3)
+                        fire_preference(
+                            unit.kind,
+                            v.kind,
+                            distance_sq(unit.x, unit.z, v.x, v.z).sqrt(),
+                        )
                     };
                     score(a).total_cmp(&score(b))
                 })
                 .map(|(j, _)| j);
             let unit_in_range = firing_target.is_some();
-            let building_range = if unit.kind == UnitKind::Demolition {
-                target_building
-                    .map(|(j, _)| {
-                        let (hx, hz) = building_half_size(buildings[j].kind);
-                        let dx = unit.x - buildings[j].x;
-                        let dz = unit.z - buildings[j].z;
-                        let distance = (dx * dx + dz * dz).sqrt();
-                        // Intersect the approach ray with the rectangular footprint.
-                        let edge = (hx / dx.abs().max(0.001)).min(hz / dz.abs().max(0.001));
-                        distance * edge.min(1.0) + unit.kind.radius() + 0.6
-                    })
-                    .unwrap_or(range)
-            } else {
-                range + 2.3
-            };
+            let building_range = range + 2.3;
             let building_in_range = nearest_building_distance <= building_range * building_range;
             if unit.cooldown <= 0.0 && (unit_in_range || building_in_range) {
-                if unit.kind == UnitKind::Demolition {
-                    detonating.push(unit_index);
-                    continue;
-                }
                 if unit_in_range {
                     let j = firing_target.unwrap();
                     unit_damage[j] += unit.kind.damage(Some(snapshot[j].kind));
@@ -1435,12 +1455,7 @@ impl Game {
                     } else if nearest_unit_distance <= nearest_building_distance {
                         range * 0.95
                     } else {
-                        building_range
-                            * if unit.kind == UnitKind::Demolition {
-                                0.98
-                            } else {
-                                0.95
-                            }
+                        building_range * 0.95
                     };
                     let right_of_way = if unit.state == UnitState::Gather {
                         navigation::RightOfWay::Regroup
@@ -1479,7 +1494,7 @@ impl Game {
                     })
                     .max_by(|(_, a), (_, c)| {
                         let score = |u: &Unit| {
-                            emplacement_damage(u.kind) * 100.0 - distance_sq(b.x, b.z, u.x, u.z)
+                            emplacement_preference(u.kind, distance_sq(b.x, b.z, u.x, u.z))
                         };
                         score(a).total_cmp(&score(c))
                     })
@@ -1503,7 +1518,7 @@ impl Game {
                             target_z: target.z,
                         });
                         self.next_shot_id += 1;
-                        b.cooldown = 2.2;
+                        b.cooldown = EMPLACEMENT_INTERVAL;
                     }
                 }
                 continue;
@@ -1515,12 +1530,12 @@ impl Game {
                     .filter(|(_, u)| {
                         u.team != b.team
                             && u.on_field()
-                            && distance_sq(b.x, b.z, u.x, u.z) < 11.0 * 11.0
+                            && distance_sq(b.x, b.z, u.x, u.z) < COMMAND_RANGE * COMMAND_RANGE
                     })
                     .map(|(j, u)| (j, distance_sq(b.x, b.z, u.x, u.z)))
                     .min_by(|a, b| a.1.total_cmp(&b.1))
                 {
-                    unit_damage[j] += 18.0;
+                    unit_damage[j] += COMMAND_DAMAGE;
                     self.shots.push(CombatShot {
                         id: self.next_shot_id,
                         time: self.time,
@@ -1535,7 +1550,7 @@ impl Game {
                         target_z: snapshot[j].z,
                     });
                     self.next_shot_id += 1;
-                    b.cooldown = 1.0;
+                    b.cooldown = COMMAND_INTERVAL;
                 }
             }
         }
@@ -1575,10 +1590,7 @@ impl Game {
             }
             for b in &mut self.buildings {
                 if b.hp > 0.0 {
-                    let (hx, hz) = building_half_size(b.kind);
-                    let dx = ((x - b.x).abs() - hx).max(0.0);
-                    let dz = ((z - b.z).abs() - hz).max(0.0);
-                    b.hp -= demolition_damage((dx * dx + dz * dz).sqrt());
+                    b.hp -= demolition_damage(demolition::footprint_distance(b, x, z));
                 }
             }
         }
@@ -1734,6 +1746,17 @@ fn emplacement_damage(kind: UnitKind) -> f32 {
         UnitKind::Collector | UnitKind::Demolition => 50.0,
         UnitKind::Soldier | UnitKind::Rocket => 8.0,
     }
+}
+
+/// Units fire on the target in range they prefer most: the most damage,
+/// slightly favoring nearer targets.
+fn fire_preference(shooter: UnitKind, target: UnitKind, distance: f32) -> f32 {
+    shooter.damage(Some(target)) / (1.0 + distance / shooter.range() * 0.3)
+}
+
+// Guns prefer armor; within a class, the nearest target.
+fn emplacement_preference(target: UnitKind, distance_sq: f32) -> f32 {
+    emplacement_damage(target) * 100.0 - distance_sq
 }
 
 fn angle_delta(target: f32, facing: f32) -> f32 {
@@ -2287,12 +2310,27 @@ mod tests {
         ]);
         g.combat_and_move(0.05);
         assert!(g.units.iter().all(|u| u.hp <= 0.0));
-        // 270 credits of rockets get two volleys before the truck can close.
+        // Three rockets alone cannot stop a truck before it closes, but with
+        // two tanks their first volley destroys it outside its blast radius.
         let mut g = isolated_units(&[
             (Team::Player, UnitKind::Demolition, 0.0, 10.0),
             (Team::Enemy, UnitKind::Rocket, -2.5, 0.0),
             (Team::Enemy, UnitKind::Rocket, 0.0, 0.0),
             (Team::Enemy, UnitKind::Rocket, 2.5, 0.0),
+        ]);
+        g.units[0].state = UnitState::Attack;
+        for _ in 0..100 {
+            g.combat_and_move(0.05);
+            g.resolve_collisions();
+        }
+        assert!(g.units[1..].iter().all(|u| u.hp <= 0.0));
+        let mut g = isolated_units(&[
+            (Team::Player, UnitKind::Demolition, 0.0, 12.0),
+            (Team::Enemy, UnitKind::Rocket, -2.5, 0.0),
+            (Team::Enemy, UnitKind::Rocket, 0.0, 0.0),
+            (Team::Enemy, UnitKind::Rocket, 2.5, 0.0),
+            (Team::Enemy, UnitKind::Tank, -5.5, 0.0),
+            (Team::Enemy, UnitKind::Tank, 5.5, 0.0),
         ]);
         g.units[0].state = UnitState::Attack;
         for _ in 0..100 {
@@ -2311,6 +2349,155 @@ mod tests {
             demolition_damage(2.0) < 800.0,
             "even the weakest starting structure survives"
         );
+    }
+
+    fn run_until_blast(g: &mut Game, steps: usize) {
+        for _ in 0..steps {
+            g.combat_and_move(0.05);
+            g.resolve_collisions();
+            if !g.explosions.is_empty() {
+                break;
+            }
+        }
+    }
+
+    #[test]
+    fn waiting_truck_parks_ahead_of_the_rally_line_without_taking_a_place() {
+        for team in [Team::Player, Team::Enemy] {
+            let mut g = Game::new();
+            g.units.clear();
+            g.spawn(team, UnitKind::Soldier);
+            g.spawn(team, UnitKind::Soldier);
+            g.spawn(team, UnitKind::Demolition);
+            g.spawn(team, UnitKind::Soldier);
+            let truck = &g.units[2];
+            assert_eq!((truck.rally_x, truck.rally_z), demolition::post(team));
+            let front_row = g.units[0].rally_z;
+            assert!(
+                (truck.rally_z - front_row).abs() > DEMOLITION_RADIUS,
+                "a blast at the post must not reach the line"
+            );
+            assert!(truck.rally_z.abs() < front_row.abs());
+            // The next soldier takes the place the truck would have used.
+            assert_eq!(g.units[3].rally_x, -3.4);
+        }
+    }
+
+    #[test]
+    fn sent_truck_passes_a_lone_rifleman_for_the_group_behind_it() {
+        let mut units = vec![
+            (Team::Player, UnitKind::Demolition, 0.0, 0.0),
+            (Team::Enemy, UnitKind::Soldier, 6.0, -5.0),
+        ];
+        for (x, z) in [
+            (-2.4, -14.0),
+            (0.0, -14.0),
+            (2.4, -14.0),
+            (-1.2, -16.2),
+            (1.2, -16.2),
+        ] {
+            units.push((Team::Enemy, UnitKind::Soldier, x, z));
+        }
+        let mut g = isolated_units(&units);
+        g.units[0].state = UnitState::Attack;
+        run_until_blast(&mut g, 200);
+        assert_eq!(g.explosions.len(), 1);
+        assert!(g.explosions[0].z < -9.0, "the blast belongs in the group");
+        assert!(g.units[1].hp > 0.0, "the lone rifleman is not worth it");
+        assert!(g.units[2..].iter().filter(|u| u.hp <= 0.0).count() >= 4);
+    }
+
+    #[test]
+    fn truck_holds_its_blast_when_it_would_hurt_its_own_side_more() {
+        for state in [UnitState::Gather, UnitState::Attack] {
+            let mut g = isolated_units(&[
+                (Team::Player, UnitKind::Demolition, 0.0, 0.0),
+                (Team::Player, UnitKind::Soldier, -2.5, 0.0),
+                (Team::Player, UnitKind::Soldier, 2.5, 0.0),
+                (Team::Player, UnitKind::Soldier, 0.0, 2.5),
+                (Team::Player, UnitKind::Rocket, 0.0, -2.5),
+                (Team::Enemy, UnitKind::Soldier, 2.0, -2.0),
+            ]);
+            g.units[0].state = state;
+            for _ in 0..60 {
+                g.combat_and_move(0.05);
+                g.resolve_collisions();
+            }
+            assert!(g.explosions.is_empty(), "{state:?}");
+            assert!(g.units[5].hp <= 0.0, "the troops deal with the rifleman");
+            assert!(g.units[1..5].iter().all(|u| u.hp > 0.0));
+        }
+    }
+
+    #[test]
+    fn waiting_truck_strikes_a_rifle_wave_that_reaches_its_post() {
+        let mut units = vec![(Team::Player, UnitKind::Demolition, 0.0, 19.0)];
+        for i in 0..8 {
+            units.push((
+                Team::Enemy,
+                UnitKind::Soldier,
+                (i % 4) as f32 * 2.4 - 3.6,
+                -(i / 4) as f32 * 2.2,
+            ));
+        }
+        let mut g = isolated_units(&units);
+        for u in g.units.iter_mut().skip(1) {
+            u.state = UnitState::Attack;
+        }
+        run_until_blast(&mut g, 300);
+        assert_eq!(g.explosions.len(), 1);
+        assert_eq!(g.units[0].state, UnitState::Gather);
+        assert!(g.units[1..].iter().filter(|u| u.hp <= 0.0).count() >= 5);
+    }
+
+    #[test]
+    fn waiting_truck_presses_its_strike_under_fire_at_any_frame_rate() {
+        // Medium's first wave walks into a lone truck. Turning back to the
+        // post once hit would only get it destroyed there for nothing.
+        for dt in [0.05, 1.0 / 60.0, 1.0 / 144.0] {
+            let mut g = Game::with_difficulty(26, Difficulty::Medium);
+            g.update(0.5);
+            g.train("demolition");
+            let mut killed = None;
+            for _ in 0..(25.0 / dt) as usize {
+                let enemies = g.units.iter().filter(|u| u.team == Team::Enemy).count();
+                g.update(dt);
+                if g.explosions.iter().any(|e| g.time - e.time < dt * 0.99) {
+                    killed =
+                        Some(enemies - g.units.iter().filter(|u| u.team == Team::Enemy).count());
+                    break;
+                }
+            }
+            assert!(killed.is_some_and(|k| k >= 3), "{dt}: {killed:?}");
+        }
+    }
+
+    #[test]
+    fn waiting_truck_does_not_leave_its_post_for_distant_targets() {
+        let mut units = vec![(Team::Player, UnitKind::Demolition, 0.0, 19.0)];
+        for (x, z) in [(-2.4, -10.0), (0.0, -10.0), (2.4, -10.0), (0.0, -12.2)] {
+            units.push((Team::Enemy, UnitKind::Soldier, x, z));
+        }
+        let mut g = isolated_units(&units);
+        for _ in 0..60 {
+            g.combat_and_move(0.05);
+            g.resolve_collisions();
+        }
+        assert!(g.explosions.is_empty());
+        assert!(distance_sq(g.units[0].x, g.units[0].z, 0.0, 19.0) < 0.25);
+    }
+
+    #[test]
+    fn sent_truck_finishes_a_damaged_building_rather_than_chipping_a_healthy_one() {
+        let mut g = isolated_units(&[(Team::Player, UnitKind::Demolition, 0.0, 0.0)]);
+        g.units[0].state = UnitState::Attack;
+        g.add_building(Team::Enemy, BuildingKind::Factory, 9.0, -14.0, 1000.0);
+        g.add_building(Team::Enemy, BuildingKind::Barracks, -9.0, -14.0, 800.0);
+        g.buildings[1].hp = 300.0;
+        run_until_blast(&mut g, 200);
+        assert_eq!(g.explosions.len(), 1);
+        assert!(g.buildings[1].hp <= 0.0);
+        assert_eq!(g.buildings[0].hp, 1000.0);
     }
 
     #[test]

@@ -2,24 +2,38 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0b1013">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0d0e">
   <title>LOWER BASE — Tactical Command</title>
   <link rel="icon" href="data:,">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=Chakra+Petch:wght@500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
   <main id="main-menu" class="front-screen" aria-labelledby="menu-title">
-    <div class="menu-card">
-      <span class="brand-mark menu-mark" aria-hidden="true">✦</span>
-      <p class="eyebrow">TACTICAL COMMAND</p>
-      <h1 id="menu-title">LOWER<br><span>BASE</span></h1>
-      <p class="menu-intro">Build your army. Hold the south.<br>Take the battlefield.</p>
+    <div class="menu-art">
+      <svg class="menu-art-field" aria-hidden="true" viewBox="0 0 1232 900" preserveAspectRatio="xMidYMid slice">
+        <rect width="1232" height="900" fill="#2c3225"/>
+        <ellipse cx="300" cy="620" rx="420" ry="220" fill="#353c2c"/>
+        <ellipse cx="1000" cy="180" rx="320" ry="160" fill="#283022"/>
+        <path d="M590 900 C 640 720, 520 560, 640 400 S 720 140, 620 0" stroke="#433f32" stroke-width="60" fill="none"/>
+        <g fill="#c9a43a" opacity=".8"><circle cx="300" cy="450" r="7"/><circle cx="322" cy="466" r="5"/><circle cx="284" cy="472" r="6"/><circle cx="930" cy="470" r="7"/><circle cx="952" cy="488" r="6"/></g>
+        <g fill="#4a8be6" opacity=".9"><rect x="520" y="560" width="26" height="16"/><rect x="566" y="586" width="26" height="16"/><rect x="612" y="552" width="26" height="16"/></g>
+        <g fill="#d4342a" opacity=".9"><rect x="680" y="300" width="26" height="16"/><rect x="726" y="322" width="26" height="16"/></g>
+        <path d="M580 576 L 700 312" stroke="#ffb347" stroke-width="3" stroke-dasharray="8 10"/>
+        <circle cx="700" cy="312" r="40" fill="#ffb347" opacity=".25"/><circle cx="700" cy="312" r="14" fill="#ffe0a0"/>
+        <rect width="1232" height="900" fill="#0b0d0e" opacity=".45"/>
+      </svg>
+      <div class="menu-title">
+        <span class="brand-mark menu-mark" aria-hidden="true">LB</span>
+        <h1 id="menu-title">LOWER<br><span>BASE</span></h1>
+      </div>
+    </div>
+    <div class="menu-panel">
       <fieldset class="difficulty-picker" aria-describedby="difficulty-description difficulty-fairness">
-        <legend>AI DIFFICULTY</legend>
+        <legend>ENEMY</legend>
         <div class="difficulty-options">
           <label><input type="radio" name="difficulty" value="easy"><span>EASY</span></label>
           <label><input type="radio" name="difficulty" value="medium" checked><span>MEDIUM</span></label>
@@ -29,62 +43,96 @@
         <p id="difficulty-fairness">Fair play in every mode. Equal resources and unit stats. No hidden information.</p>
       </fieldset>
       <nav class="menu-actions" aria-label="Main menu">
-        <button id="start-game" class="primary-action" type="button" disabled>START GAME <span aria-hidden="true">↗</span></button>
-        <button id="start-demo" type="button" disabled>DEMO <small>COMPUTER VS COMPUTER</small></button>
-        <a href="./help.html">HELP <span aria-hidden="true">?</span></a>
+        <button id="start-game" class="bevel primary-action" type="button" disabled>START <small aria-hidden="true">↵</small></button>
+        <div class="menu-secondary">
+          <button id="start-demo" class="bevel" type="button" disabled>DEMO <small>CPU VS CPU</small></button>
+          <a class="bevel" href="./help.html">HELP <small aria-hidden="true">?</small></a>
+        </div>
       </nav>
       <p id="menu-status" class="menu-status" role="status">Loading game…</p>
     </div>
   </main>
+
   <div id="app" hidden>
-    <header class="topbar">
-      <div class="brand" aria-label="Lower Base"><span class="brand-mark">✦</span></div>
-      <div class="top-center"><span id="clock">00:00</span></div>
+    <section class="battlefield" aria-label="3D battlefield">
+      <div id="scene" title="Select gathered units"></div>
+      <div class="scene-vignette"></div>
+      <p id="hud-status" class="hud-status" role="status" hidden></p>
+      <p id="spectator-note" class="spectator-note" hidden>DEMO · BLUE VS RED<span>Two computer commanders control production and attacks.</span></p>
+      <div id="game-over" class="overlay hidden"><div class="overlay-card"><h2 id="result-title">VICTORY</h2><button id="restart" class="bevel primary-action" type="button">PLAY AGAIN</button><button id="end-menu" class="bevel" type="button">MAIN MENU</button></div></div>
+    </section>
+
+    <div class="orders-bar bevel" role="toolbar" aria-label="Orders">
+      <div class="mode-switch" role="group" aria-label="Deployment mode">
+        <button id="gather" class="bevel cmd" type="button" title="Release sheltered units and gather new troops at your base (1)">GATHER <small>1</small></button>
+        <button id="attack" class="bevel cmd atk" type="button" title="Release sheltered units and send all troops into battle (2)">ATTACK <small>2</small></button>
+        <button id="retreat" class="bevel cmd" type="button" title="Recall troops to your rally area; new units stay inside buildings until Gather or Attack (R)">RETREAT <small>R</small></button>
+      </div>
+      <span class="orders-sep" aria-hidden="true"></span>
+      <div class="selection-count inset" title="Selected units">
+        <svg aria-hidden="true" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 4V1h3M10 1h3v3M13 10v3h-3M4 13H1v-3"/></svg>
+        <strong id="selected-count" aria-label="Selected units">0</strong>
+      </div>
+      <button id="send-selected" class="bevel cmd send" type="button" title="Send selected units into battle (Enter)" disabled>SEND <small aria-hidden="true">↵</small></button>
+    </div>
+
+    <div class="sidebar-top">
+      <button id="pause" class="bevel icon-button" type="button" title="Pause game (P)" aria-label="Pause (P)">
+        <svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="1" y="1" width="3.5" height="10"/><rect x="7.5" y="1" width="3.5" height="10"/></svg>
+      </button>
+      <button id="abort" class="bevel" type="button" title="Abort match and return to the menu">ABORT</button>
+    </div>
+
+    <div class="radar inset">
+      <canvas id="radar" role="img" aria-label="Radar: blue allied and red hostile positions"></canvas>
+      <div class="view-switch" role="group" aria-label="Battlefield view"><button id="map-view" type="button" class="active" aria-pressed="true">MAP</button><button id="base-view" type="button" aria-pressed="false">BASE</button></div>
+    </div>
+
+    <div class="forces">
+      <strong id="friendly-units" class="force-count friendly" title="Allied units">0</strong>
+      <div class="force-bar inset" title="Allied structure health"><span id="friendly-bar"></span></div>
+      <span class="force-structures" title="Allied structures"><span id="friendly-buildings">0</span></span>
+      <strong id="enemy-units" class="force-count hostile" title="Hostile units">0</strong>
+      <div class="force-bar inset hostile" title="Hostile structure health"><span id="enemy-bar"></span></div>
+      <span class="force-structures" title="Hostile structures"><span id="enemy-buildings">0</span></span>
+    </div>
+
+    <div class="credits-row inset">
+      <span class="credits">
+        <svg aria-hidden="true" width="14" height="14" viewBox="0 0 14 14"><path d="M7 0 14 7 7 14 0 7z" fill="currentColor"/></svg>
+        <strong id="credits" aria-label="Credits">0</strong>
+      </span>
+      <span id="clock" aria-label="Match time">00:00</span>
+    </div>
+
+    <div id="production" class="build-grid" role="group" aria-label="Build">
+      <div class="cameo-blank inset" aria-hidden="true"></div>
+      <button id="defense-0" class="cameo" type="button" title="Build left anti-tank gun (8): 200 credits, 8 seconds. Strong against tanks; vulnerable to rifles.">
+        <svg class="cameo-icon" aria-hidden="true" viewBox="0 0 48 48"><path fill="#252b24" d="M6 36h36v8H6z"/><path fill="#8c9aa1" d="M12 26h24v10H12z"/><path fill="#6484bc" d="M12 33h24v3H12z"/><path fill="#8c9aa1" d="M18 19h12v7H18z"/><path stroke="#c9c6b0" stroke-width="3" d="M28 22 46 12"/></svg>
+        <span class="cameo-progress" aria-hidden="true"></span>
+        <span class="cameo-key" aria-hidden="true">8</span><span class="cameo-name">AT·L</span><small class="cameo-cost">200</small>
+      </button>
+      <button id="defense-1" class="cameo" type="button" title="Build right anti-tank gun (9): 200 credits, 8 seconds. Strong against tanks; vulnerable to rifles.">
+        <svg class="cameo-icon" aria-hidden="true" viewBox="0 0 48 48"><path fill="#252b24" d="M6 36h36v8H6z"/><path fill="#8c9aa1" d="M12 26h24v10H12z"/><path fill="#6484bc" d="M12 33h24v3H12z"/><path fill="#8c9aa1" d="M18 19h12v7H18z"/><path stroke="#c9c6b0" stroke-width="3" d="M20 22 2 12"/></svg>
+        <span class="cameo-progress" aria-hidden="true"></span>
+        <span class="cameo-key" aria-hidden="true">9</span><span class="cameo-name">AT·R</span><small class="cameo-cost">200</small>
+      </button>
+    </div>
+
+    <p class="economy"><span id="economy-status"></span></p>
+
+    <div class="emblem">
+      <span class="brand-mark" aria-hidden="true">LB</span>
       <span id="match-label" class="match-label">YOUR COMMAND</span>
-      <div class="match-actions"><button id="pause" type="button" title="Pause game (P)">PAUSE</button><button id="abort" type="button" title="Abort match and return to the menu">ABORT</button></div>
-      <div class="top-right"><span class="credits-icon">◆</span><strong id="credits" aria-label="Credits">0</strong></div>
-    </header>
+    </div>
 
-    <main class="layout">
-      <aside class="panel left-panel">
-        <p id="spectator-note" class="spectator-note" hidden>DEMO · BLUE VS RED<br><span>Two computer commanders control production and attacks. Watch the battle unfold.</span></p>
-        <div class="mode-switch" role="group" aria-label="Deployment mode">
-          <button id="gather" class="mode active" type="button" title="Release sheltered units and gather new troops at your base"><span class="mode-icon">▥</span><span><strong>GATHER</strong></span><span class="mode-key">1</span></button>
-          <button id="attack" class="mode" type="button" title="Release sheltered units and send all troops into battle"><span class="mode-icon">➤</span><span><strong>ATTACK</strong></span><span class="mode-key">2</span></button>
-          <button id="retreat" class="mode" type="button" title="Recall troops to your rally area; new units stay inside buildings until Gather or Attack (R)"><span class="mode-icon">↶</span><span><strong>RETREAT</strong></span><span class="mode-key">R</span></button>
-        </div>
-        <div id="production" class="production"></div>
-        <div class="defenses" role="group" aria-label="Fixed anti-tank defenses">
-          <div class="defense-heading">ANTI-TANK DEFENSE <span>2 FIXED SLOTS</span></div>
-          <div class="defense-slots">
-            <button id="defense-0" type="button" title="Build left anti-tank gun (8): 200 credits, 8 seconds. Strong against tanks; vulnerable to rifles.">LEFT PAD <small>◆ 200 · BUILD</small></button>
-            <button id="defense-1" type="button" title="Build right anti-tank gun (9): 200 credits, 8 seconds. Strong against tanks; vulnerable to rifles.">RIGHT PAD <small>◆ 200 · BUILD</small></button>
-          </div>
-          <p>Long range · slow traverse · protect from infantry</p>
-        </div>
-        <div class="selection-box"><div class="selection-top"><span>SELECTED</span><strong id="selected-count">00</strong></div><button id="send-selected" class="send-button" type="button" title="Send selected units into battle" disabled><span>↗</span> SEND <span>↗</span></button></div>
-      </aside>
-
-      <section class="battlefield" aria-label="3D battlefield">
-        <div id="scene" title="Select gathered units"></div>
-        <div class="scene-vignette"></div>
-        <div class="view-switch" role="group" aria-label="Battlefield view"><button id="map-view" type="button" class="active" aria-pressed="true">MAP</button><button id="base-view" type="button" aria-pressed="false">BASE</button></div>
-        <div id="game-over" class="overlay hidden"><div class="overlay-card"><h2 id="result-title">VICTORY</h2><button id="restart" type="button">PLAY AGAIN</button><button id="end-menu" type="button">MAIN MENU</button></div></div>
-      </section>
-
-      <aside class="panel right-panel">
-        <div class="force"><div class="force-heading"><span><i class="key-friendly"></i> ALLIED</span></div><div class="force-stats"><div><strong id="friendly-units">0</strong><small>UNITS</small></div><div><strong id="friendly-buildings">0</strong><small>STRUCTURES</small></div></div><div class="force-bar"><span id="friendly-bar"></span></div></div>
-        <div class="force hostile"><div class="force-heading"><span><i class="key-enemy"></i> HOSTILE</span></div><div class="force-stats"><div><strong id="enemy-units">0</strong><small>UNITS</small></div><div><strong id="enemy-buildings">0</strong><small>STRUCTURES</small></div></div><div class="force-bar"><span id="enemy-bar"></span></div></div>
-      </aside>
-    </main>
     <div id="pause-screen" class="pause-screen" role="dialog" aria-modal="true" aria-labelledby="pause-title" hidden>
-      <div class="menu-card pause-card">
+      <div class="pause-card">
         <p class="eyebrow">COMMAND ON HOLD</p>
         <h2 id="pause-title">PAUSED</h2>
-        <p class="menu-intro">The battlefield is frozen.<br>Resume when you’re ready.</p>
         <div class="menu-actions">
-          <button id="resume" class="primary-action" type="button">RESUME <span aria-hidden="true">↗</span></button>
-          <button id="pause-abort" type="button">ABORT TO MENU</button>
+          <button id="resume" class="bevel primary-action" type="button">RESUME <small aria-hidden="true">P</small></button>
+          <button id="pause-abort" class="bevel" type="button">ABORT TO MENU</button>
         </div>
       </div>
     </div>
