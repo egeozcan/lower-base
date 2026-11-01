@@ -172,7 +172,7 @@ fn ai_keeps_reinforcing_when_its_mobile_armor_already_matches_the_threat() {
 }
 
 #[test]
-fn ai_saves_for_visible_armor_but_avoids_hidden_units_and_overrun_pads() {
+fn ai_buys_for_visible_armor_only_with_credits_and_never_holds_back_orders() {
     for team in [Team::Player, Team::Enemy] {
         let mut game = quiet_game();
         let opponent = if team == Team::Player {
@@ -184,34 +184,44 @@ fn ai_saves_for_visible_armor_but_avoids_hidden_units_and_overrun_pads() {
             game.spawn(opponent, UnitKind::Tank);
             game.units.last_mut().unwrap().state = UnitState::Garrison;
         }
-        assert!(!game.prepare_emplacement(team));
+        // Hidden garrisons are not a visible threat.
+        game.prepare_emplacement(team);
         assert!(!game.alive_building(team, BuildingKind::Emplacement));
         for unit in &mut game.units {
             unit.state = UnitState::Attack;
         }
+        // Without the credits there is no purchase and no saving.
         if team == Team::Player {
             game.credits = 100.0;
         } else {
             game.ai_credits = 100.0;
         }
-        assert!(
-            game.prepare_emplacement(team),
-            "reserve money until affordable"
+        game.prepare_emplacement(team);
+        assert!(!game.alive_building(team, BuildingKind::Emplacement));
+        assert_eq!(
+            if team == Team::Player {
+                game.credits
+            } else {
+                game.ai_credits
+            },
+            100.0,
+            "a failed gun purchase spends nothing"
         );
         if team == Team::Player {
             game.credits = 200.0;
         } else {
             game.ai_credits = 200.0;
         }
-        assert!(!game.prepare_emplacement(team));
+        game.prepare_emplacement(team);
         assert!(game.alive_building(team, BuildingKind::Emplacement));
         game.buildings
             .retain(|b| b.kind != BuildingKind::Emplacement);
+        // Pads overrun by enemies are never bought into.
         for unit in &mut game.units {
             unit.x = 0.0;
             unit.z = if team == Team::Player { 30.0 } else { -30.0 };
         }
-        assert!(!game.prepare_emplacement(team));
+        game.prepare_emplacement(team);
         assert!(!game.alive_building(team, BuildingKind::Emplacement));
     }
 }

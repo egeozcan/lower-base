@@ -53,6 +53,22 @@ fn main() {
         );
         return;
     }
+    if args.first().is_some_and(|arg| arg == "--defense") {
+        let runs = lower_base::simulation::defense_benchmark::runs();
+        for r in &runs {
+            eprintln!(
+                "{} gun={}: defender {} (left {:.0}), attacker left {:.0} at {:.1}s",
+                r.army,
+                r.gun,
+                if r.defender_holds { "holds" } else { "loses" },
+                r.defender_value_left,
+                r.attacker_value_left,
+                r.seconds
+            );
+        }
+        println!("{}", serde_json::to_string_pretty(&runs).unwrap());
+        return;
+    }
     if args.first().is_some_and(|arg| arg == "--trucks") {
         let runs = lower_base::simulation::truck_benchmark::runs();
         for r in &runs {
@@ -70,7 +86,7 @@ fn main() {
         return;
     }
     if args.iter().any(|arg| arg == "--help") {
-        println!("ai-bench [seed-count=12] [first-seed=0] [max-seconds=360] [standard|rush|balanced|stock|player-armor|interception|mixed-wave|tank-opening|all]\nstock: five original scenarios; player-armor: three recordings and four automated tank strategies; interception: an unopposed infantry wave; mixed-wave: two recordings and three mixed-army attacks; tank-opening: a recording and three armor-first infantry rushes; all: all twenty-two scenarios.\nai-bench --balance runs 72 equal-credit counter battles.\nai-bench --traffic measures collector deliveries and group movement under traffic.\nai-bench --trucks scores demolition-truck strikes and line defenses.\nPrints JSON; timeouts count as draws.");
+        println!("ai-bench [seed-count=12] [first-seed=0] [max-seconds=360] [standard|rush|balanced|stock|player-armor|interception|mixed-wave|tank-opening|all]\nstock: five original scenarios; player-armor: three recordings and four automated tank strategies; interception: an unopposed infantry wave; mixed-wave: two recordings and three mixed-army attacks; tank-opening: a recording and three armor-first infantry rushes; all: all twenty-two scenarios.\nai-bench --balance runs 72 equal-credit counter battles.\nai-bench --traffic measures collector deliveries and group movement under traffic.\nai-bench --trucks scores demolition-truck strikes and line defenses.\nai-bench --defense runs gun-backed defender duels against equal mirror armies.\nPrints JSON; timeouts count as draws.");
         return;
     }
     let number = |i: usize, default: u32| -> u32 {

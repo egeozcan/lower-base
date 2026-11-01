@@ -76,6 +76,8 @@ pub struct MatchResult {
     /// Credits Hard's truck blasts destroyed, minus its own losses to them,
     /// measured over the 0.05s step of each blast.
     pub hard_truck_net: f32,
+    /// Anti-tank guns Hard placed on its pads during the match.
+    pub hard_emplacements_built: usize,
 }
 
 #[derive(serde::Deserialize)]
@@ -409,6 +411,7 @@ pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) ->
     let mut next_order = 0;
     let mut trucks = std::collections::HashSet::new();
     let mut explosions = std::collections::HashSet::new();
+    let mut emplacements = std::collections::HashSet::new();
     let mut hard_truck_net = 0.0;
     let dt = if scripted { 0.05 } else { 0.25 };
     let trace = std::env::var_os("AI_BENCH_TRACE").is_some();
@@ -526,6 +529,13 @@ pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) ->
         for explosion in &game.explosions {
             explosions.insert(explosion.id);
         }
+        for b in game
+            .buildings
+            .iter()
+            .filter(|b| b.team == hard_team && b.kind == BuildingKind::Emplacement)
+        {
+            emplacements.insert(b.id);
+        }
         if game.outcome != Outcome::Playing {
             break;
         }
@@ -546,6 +556,7 @@ pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) ->
         hard_demolition_built: trucks.len(),
         explosions: explosions.len(),
         hard_truck_net,
+        hard_emplacements_built: emplacements.len(),
     }
 }
 

@@ -38,7 +38,7 @@ All difficulties play fairly: both sides start with 500 credits, earn 24 passive
 During either a game or demo, **Pause** (or `P`) freezes the battlefield, production, and income. Choose **Resume**, press `P`, or press `Esc` to continue. **Abort** returns to the main menu; your next match starts fresh. Finished demos announce the winning color and offer **Watch Again** or **Main Menu**.
 
 - Queue rifle infantry and rocket troopers at the barracks, and tanks, demolition trucks, or ore collectors at the factory. Credits replenish over time; collectors bring in additional income.
-- **Anti-tank defenses:** each base has two fixed pads, left and right, marked by rings ahead of the production buildings. Use the defense buttons or `8` / `9` to build a gun for **200 credits**. Construction takes **8 seconds**, independently of unit queues; the gun is vulnerable and cannot fire while building. Completed guns have **320 HP**, range **16**, and fire every **2.2 seconds** for **100 damage against tanks**, 50 against trucks/collectors, and only 8 against infantry. They prioritize armor and turn slowly. Rifle infantry deal double their usual building damage against these guns, so protect them with troops. Destroyed guns can be rebuilt for full cost while your command center stands. Empty pads do not count toward victory. Both sides use identical rules; Medium and Hard prepare defenses against visible massed armor.
+- **Anti-tank defenses:** each base has two fixed pads, left and right, marked by rings ahead of the production buildings. Use the defense buttons or `8` / `9` to build a gun for **200 credits**. Construction takes **8 seconds**, independently of unit queues; the gun is vulnerable and cannot fire while building. Completed guns have **320 HP**, range **22**, and fire every **2 seconds** for **100 damage against tanks**, 50 against trucks/collectors, and **20 against infantry and rockets**. They prioritize armor and turn slowly. Their range covers the approach before infantry or armor can fire back. Rifle infantry deal double their usual building damage against these guns, so protect them with troops. Destroyed guns can be rebuilt for full cost while your command center stands. Empty pads do not count toward victory. Both sides use identical rules; Medium and Hard buy guns for visible armored attacks, but not against rifle-dominated ones.
 - Each producing building has **9 shared slots for queued and garrisoned units**, shown above it in a 3×3 grid of rounded unit icons. Garrisoned units have blue backgrounds and a check mark; click one to eject it and free its slot. Ejected combat units gather at the rally area during Retreat, while collectors begin mining. Click a queued unit to cancel it and refund its cost (up to the credit cap). Canceling the active unit resets production progress; canceling a waiting unit preserves it.
 - **Demolition Truck** costs 250 credits and takes 6 seconds at the factory. Only one may be alive or queued per side; its slot opens after it explodes. It has 140 HP, moves slightly faster than a tank, and explodes when it strikes or is destroyed. The blast deals 450 damage within 2 units, falling linearly to zero at radius 7. It damages **all units and buildings, including allies**, and can trigger other trucks. Building damage uses the nearest edge of the footprint; a full-health building survives even a direct blast.
   - A waiting truck parks on its own post, 8 units in front of your rally area and beyond blast reach of the troops there. It strikes enemies that come within 13 units of the post when the blast is worth at least its price, or for less once it comes under fire.
@@ -215,6 +215,9 @@ python3 scripts/compare-ai-bench.py before.json after.json \
 
 # Demolition-truck strikes and line defenses, with commanders disabled.
 cargo run --release --features ai-bench --bin ai-bench -- --trucks
+
+# Gun-backed defender duels against equal mirror armies, commanders disabled.
+cargo run --release --features ai-bench --bin ai-bench -- --defense
 
 # Optional per-side army, economy, queue and strategy traces go to stderr.
 AI_BENCH_TRACE=1 cargo run --release --features ai-bench --bin ai-bench -- 1 26 180 all
@@ -588,3 +591,72 @@ Rejected probes:
   averaged well below the truck's price and wins fell to 1157/1408.
 - Counting own losses double: no effect on the lost held-out match, and it
   lost another.
+
+### Anti-tank defense tuning
+
+Guns were too weak to hold a line. Range 16 let massed tanks and rockets close
+on the front rank before a gun fired twice, infantry took 8 damage per shot, and
+Hard bought a gun only when it had three or more tanks in view and no more
+infantry than tanks. The `--defense` duels place a gun-backed defender against
+an equal army from its own rally area, with the attacker marching in. Before
+the change a gun-backed defender lost all eight mirror armies. After it, the
+defender holds seven of eight:
+
+| Mirror army | No gun | Gun, before | Gun, after |
+| --- | --- | --- | --- |
+| 8 rifles | loses | loses | holds, 31 left |
+| 6 rifles, 2 rockets | loses | loses | holds, 38 left |
+| 4 rockets, 2 rifles | loses | loses | holds, 64 left |
+| 2 tanks, 6 rifles | loses | loses | holds, 321 left |
+| 3 tanks, 2 rockets, 1 rifle | loses | loses | holds, 303 left |
+| 12 rifles | loses | loses | **loses** |
+| 4 tanks, 4 rifles | loses | loses | holds, 331 left |
+| 6 rockets | mutual wipe | mutual wipe | holds, 65 left |
+
+The 12-rifle loss is positional. Attackers stop 6.65 units from the front
+rank, so their whole wave fires at the front, while the defenders' rear rank
+sits 9 units back and cannot reach it. Gun range now covers the approach, and
+a single gun changes little against 12 rifles. Fixing it means changing
+rally spacing or how units hold, which moves the whole navigation layer, so I
+left it for a separate change.
+
+Changes: gun range 16 → 22, interval 2.2 → 2.0 s, damage to infantry and
+rockets 8 → 20. The AI buys a gun once the visible opposing army is worth at
+least 450 credits (one gun) or 750 (two), unless infantry outnumber their
+tanks by more than four, or Hard's own tanks already match theirs. Buying no
+longer holds back other orders: a gun is bought only with credits on hand.
+
+Hard, all 22 scenarios, four 64-seed blocks (256 seeds, both sides, 11264 games).
+Hard fielded about 0.8 guns per game after the change:
+
+| Scenario | Wins before | Wins after | Losses before | Losses after |
+| --- | ---: | ---: | ---: | ---: |
+| mixed_assault_late | 216 | 457 | 296 | 55 |
+| tank_opening_late | 401 | 458 | 111 | 54 |
+| scarce_ore | 237 | 261 | 274 | 248 |
+| standard | 453 | 457 | 59 | 55 |
+| armor | 502 | 505 | 10 | 7 |
+| early_rush | 490 | 494 | 22 | 17 |
+| mixed_assault | 510 | 507 | 2 | 5 |
+| mixed_assault_early | 511 | 508 | 1 | 4 |
+| recorded_mixed | 512 | 510 | 0 | 2 |
+| **all** | **9976 / 11264** | **10301 / 11264** | **1287** | **959** |
+
+Mixed attacks lost 2–3 wins each (out of 512), and `recorded_mixed` lost 2.
+Those losses are small but real, and I did not find a setting that removed
+them without giving back the gains. Other scenarios were unchanged or better.
+Medium, on the same opponents and four blocks of 64 seeds, moved by +4, +4,
+0 and +8 wins out of 1408 per block.
+
+Rejected:
+
+- Saving money for a gun: holding back other orders while waiting for 200
+  credits cost wins in `recorded_mixed` and `mixed_assault`.
+- Removing the infantry gate: `recorded_mixed` fell from 128 to 118–122 of 128,
+  even though `mixed_assault_late` gained the most.
+- A margin of 2 instead of 4 kept `recorded_mixed` at 256/256 but gave back
+  most of the `mixed_assault_late` gain (115 instead of 220 of 256).
+- Buying only when the enemy's army is worth more than 1.5 times ours: the
+  gain on seeds 0–63 fell from +74 to +8.
+- Range 16 with up to 24 damage against infantry still lost the rocket and
+  mixed duels; range is what turned those into wins.

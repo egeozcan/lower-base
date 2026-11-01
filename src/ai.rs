@@ -195,33 +195,39 @@ impl HardCommander {
 }
 
 impl Game {
-    /// Save for a prepared position against visible massed armor. Never spend
-    /// emergency money on a pad already within enemy firing range.
-    pub(super) fn prepare_emplacement(&mut self, team: Team) -> bool {
+    /// Buy a gun on a free pad once the visible opposing army is worth a real
+    /// assault. Rifle-dominated attacks are left to the field army, and armor
+    /// is never matched by a gun while our own tanks already equal theirs.
+    /// Never spend emergency money on a pad already within enemy reach. A gun
+    /// is bought only with credits on hand and never holds back other orders.
+    pub(super) fn prepare_emplacement(&mut self, team: Team) {
         if !self.alive_building(team, BuildingKind::Command) {
-            return false;
+            return;
         }
         let tanks = self
             .units
             .iter()
             .filter(|u| u.team != team && u.on_field() && u.kind == UnitKind::Tank)
             .count();
-        let infantry = self
+        let soldiers = self
             .units
             .iter()
             .filter(|u| u.team != team && u.on_field() && u.kind == UnitKind::Soldier)
             .count();
-        // Static defense must not divert reinforcements from an army that
-        // already matches the opposing armor. This also avoids unnecessary
-        // purchases when a successful rush defense turns into a counterattack.
+        let threat: f32 = self
+            .units
+            .iter()
+            .filter(|u| u.team != team && u.on_field() && u.kind != UnitKind::Collector)
+            .map(|u| u.kind.cost() * (u.hp / u.max_hp).clamp(0.0, 1.0))
+            .sum();
         let own_tanks = self
             .units
             .iter()
             .filter(|u| u.team == team && u.hp > 0.0 && u.kind == UnitKind::Tank)
             .count();
-        let goal = if tanks >= 5 {
+        let goal = if threat >= 750.0 {
             2
-        } else if tanks >= 3 {
+        } else if threat >= 450.0 {
             1
         } else {
             0
@@ -231,11 +237,8 @@ impl Game {
             .iter()
             .filter(|b| b.team == team && b.hp > 0.0 && b.kind == BuildingKind::Emplacement)
             .count();
-        // Attackers stop at their own range from the rally line, just outside
-        // gun coverage, so a gun only pays off once armor must close on the
-        // base. Against a rifle-heavy mix the money is needed in the field.
-        if existing >= goal || infantry > tanks || own_tanks >= tanks {
-            return false;
+        if existing >= goal || soldiers > tanks + 4 || (tanks > 0 && own_tanks >= tanks) {
+            return;
         }
         let pad = self
             .defense_slots
@@ -254,12 +257,10 @@ impl Game {
                     })
             })
             .copied();
-        let Some(pad) = pad else { return false };
-        let built = self.build_emplacement_for(team, pad.slot);
-        if team == Team::Enemy {
+        let Some(pad) = pad else { return };
+        if self.build_emplacement_for(team, pad.slot) && team == Team::Enemy {
             self.ai_status = "PREPARING AN ANTI-TANK POSITION".into();
         }
-        !built
     }
 
     /// Whether the opponent has massed rifles with nothing that can stop a
@@ -702,9 +703,7 @@ impl Game {
                 return;
             }
         }
-        if self.prepare_emplacement(team) {
-            return;
-        }
+        self.prepare_emplacement(team);
         let enemy_emplacements = self
             .buildings
             .iter()

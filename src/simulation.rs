@@ -8,6 +8,9 @@ pub mod ai_benchmark;
 #[cfg(any(test, feature = "ai-bench"))]
 #[path = "balance_benchmark.rs"]
 pub mod balance_benchmark;
+#[cfg(any(test, feature = "ai-bench"))]
+#[path = "defense_benchmark.rs"]
+pub mod defense_benchmark;
 #[path = "demolition.rs"]
 mod demolition;
 #[cfg(test)]
@@ -35,8 +38,8 @@ const CREDIT_CAP: f32 = 2000.0;
 const EMPLACEMENT_COST: f32 = 200.0;
 const EMPLACEMENT_BUILD_TIME: f32 = 8.0;
 const EMPLACEMENT_HEALTH: f32 = 320.0;
-const EMPLACEMENT_RANGE: f32 = 16.0;
-const EMPLACEMENT_INTERVAL: f32 = 2.2;
+const EMPLACEMENT_RANGE: f32 = 22.0;
+const EMPLACEMENT_INTERVAL: f32 = 2.0;
 // Command centers provide short-range point defense.
 const COMMAND_RANGE: f32 = 11.0;
 const COMMAND_DAMAGE: f32 = 18.0;
@@ -935,9 +938,7 @@ impl Game {
     }
 
     fn ai_medium(&mut self, team: Team) {
-        if self.prepare_emplacement(team) {
-            return;
-        }
+        self.prepare_emplacement(team);
         let opponent = if team == Team::Enemy {
             Team::Player
         } else {
@@ -1744,7 +1745,7 @@ fn emplacement_damage(kind: UnitKind) -> f32 {
     match kind {
         UnitKind::Tank => 100.0,
         UnitKind::Collector | UnitKind::Demolition => 50.0,
-        UnitKind::Soldier | UnitKind::Rocket => 8.0,
+        UnitKind::Soldier | UnitKind::Rocket => 20.0,
     }
 }
 
