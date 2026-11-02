@@ -38,7 +38,7 @@ All difficulties play fairly: both sides start with 500 credits, earn 24 passive
 During either a game or demo, **Pause** (or `P`) freezes the battlefield, production, and income. Choose **Resume**, press `P`, or press `Esc` to continue. **Abort** returns to the main menu; your next match starts fresh. Finished demos announce the winning color and offer **Watch Again** or **Main Menu**.
 
 - Queue rifle infantry and rocket troopers at the barracks, and tanks, demolition trucks, or ore collectors at the factory. Credits replenish over time; collectors bring in additional income.
-- **Anti-tank defenses:** each base has two fixed pads, left and right, marked by rings ahead of the production buildings. Use the defense buttons or `8` / `9` to build a gun for **200 credits**. Construction takes **8 seconds**, independently of unit queues; the gun is vulnerable and cannot fire while building. Completed guns have **320 HP**, range **22**, and fire every **2 seconds** for **100 damage against tanks**, 50 against trucks/collectors, and **20 against infantry and rockets**. They prioritize armor and turn slowly. Their range covers the approach before infantry or armor can fire back. Rifle infantry deal double their usual building damage against these guns, so protect them with troops. Destroyed guns can be rebuilt for full cost while your command center stands. Empty pads do not count toward victory. Both sides use identical rules; Medium and Hard buy guns for visible armored attacks, but not against rifle-dominated ones.
+- **Anti-tank defenses:** each base has two fixed pads, left and right, marked by rings ahead of the production buildings. Use the defense buttons or `8` / `9` to build a gun for **200 credits**. Construction takes **8 seconds**, independently of unit queues; the gun is vulnerable and cannot fire while building. Completed guns have **450 HP**, range **22**, and fire every **1.6 seconds** for **100 damage against tanks**, 50 against trucks/collectors, and **34 against infantry and rockets**. Shells also splash other infantry and rocket troops within 2.5 units of the target for half damage. They prioritize armor and turn at a bounded speed. Their range covers the approach before infantry or armor can fire back. Rifle infantry deal double their usual building damage against these guns, so protect them with troops. Destroyed guns can be rebuilt for full cost while your command center stands. Empty pads do not count toward victory. Both sides use identical rules; Medium and Hard buy guns for visible armored attacks, but not against rifle-dominated ones. Medium gathers larger waves and more rifles against a gun-defended base.
 - Each producing building has **9 shared slots for queued and garrisoned units**, shown above it in a 3×3 grid of rounded unit icons. Garrisoned units have blue backgrounds and a check mark; click one to eject it and free its slot. Ejected combat units gather at the rally area during Retreat, while collectors begin mining. Click a queued unit to cancel it and refund its cost (up to the credit cap). Canceling the active unit resets production progress; canceling a waiting unit preserves it.
 - **Demolition Truck** costs 250 credits and takes 6 seconds at the factory. Only one may be alive or queued per side; its slot opens after it explodes. It has 140 HP, moves slightly faster than a tank, and explodes when it strikes or is destroyed. The blast deals 450 damage within 2 units, falling linearly to zero at radius 7. It damages **all units and buildings, including allies**, and can trigger other trucks. Building damage uses the nearest edge of the footprint; a full-health building survives even a direct blast.
   - A waiting truck parks on its own post, 8 units in front of your rally area and beyond blast reach of the troops there. It strikes enemies that come within 13 units of the post when the blast is worth at least its price, or for less once it comes under fire.
@@ -660,3 +660,41 @@ Rejected:
   gain on seeds 0–63 fell from +74 to +8.
 - Range 16 with up to 24 damage against infantry still lost the rocket and
   mixed duels; range is what turned those into wins.
+
+### Stronger guns (second pass)
+
+Guns were strengthened again: health 320 → 450, interval 2.0 → 1.6 s, turn
+rate 1 → 1.6 rad/s, damage to infantry and rockets 20 → 34, and a 2.5-unit
+splash that deals half damage to other infantry and rockets near the target
+(armor is not splashed). In the `--defense` duels, gun-backed defenders
+finish with more left in every mirror army they already held (8 rifles
+31 → 70, 6 rifles + 2 rockets 38 → 103, 4 rockets + 2 rifles 64 → 144,
+6 rockets 65 → 126). Twelve rifles still beat a single gun (attacker left
+202 → 137); that loss is positional, as described above.
+
+Hard, all 22 scenarios, 64 seeds, both sides:
+
+| Seeds | Wins before | Wins after | Lost | Gained |
+| --- | ---: | ---: | ---: | ---: |
+| 0–63 | 2568 / 2816 | 2591 / 2816 | 1 | 24 |
+| 64–127 (held out) | 2576 / 2816 | 2592 / 2816 | 2 | 18 |
+
+The gains come from `tank_opening_late` (+12 on both blocks) and
+`mixed_assault_late` (+5), where Hard defends behind its guns.
+
+AI changes considered:
+
+- Hard's purchase gate was re-tested with the stronger guns. An infantry
+  margin of 8 or no infantry gate still cost `recorded_mixed` (−2 of 128);
+  lower thresholds (350/650) changed nothing. The gate is unchanged.
+- Medium waits for a larger wave (3 + 2 per gun reserves, or 4 s longer per
+  gun) and asks for 2 more rifles per opposing gun.
+- Rejected: requiring Hard to have a wider army advantage per healthy enemy
+  gun before an unprovoked wave. Against a stock opponent given two free guns
+  it raised Hard from 2051 to 2197 wins of 2816, but Hard-vs-Hard demos stalled
+  (no winner by 600 s) on 7–9 of 192 seeds instead of 3. Fading the margin out
+  over time, or applying it only while Hard has no gun of its own, did not fix
+  it. Recalling unthreatened waves on our half made stalls worse (6 of 192 even
+  without the margin).
+- Known cost: with the stronger guns alone, 3 of 192 Hard-vs-Hard demos
+  (seeds 64–255) still had no winner after 600 s, against none before.

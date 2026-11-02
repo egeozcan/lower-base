@@ -37,9 +37,14 @@ const PASSIVE_INCOME: f32 = 24.0;
 const CREDIT_CAP: f32 = 2000.0;
 const EMPLACEMENT_COST: f32 = 200.0;
 const EMPLACEMENT_BUILD_TIME: f32 = 8.0;
-const EMPLACEMENT_HEALTH: f32 = 320.0;
+const EMPLACEMENT_HEALTH: f32 = 450.0;
 const EMPLACEMENT_RANGE: f32 = 22.0;
-const EMPLACEMENT_INTERVAL: f32 = 2.0;
+const EMPLACEMENT_INTERVAL: f32 = 1.6;
+// Traverse speed in radians per second.
+const EMPLACEMENT_TURN_RATE: f32 = 1.6;
+// Shells hit infantry within this radius of the target for a share of damage.
+const EMPLACEMENT_SPLASH_RADIUS: f32 = 2.5;
+const EMPLACEMENT_SPLASH_SHARE: f32 = 0.5;
 // Command centers provide short-range point defense.
 const COMMAND_RANGE: f32 = 11.0;
 const COMMAND_DAMAGE: f32 = 18.0;
@@ -1056,8 +1061,18 @@ impl Game {
                     && matches!(u.state, UnitState::Gather | UnitState::Garrison)
             })
             .count();
+        // Opposing guns cover their approach: gather a larger wave before
+        // marching into them, and add rifles, which damage guns the most.
+        let opposing_guns = self
+            .buildings
+            .iter()
+            .filter(|b| b.team == opponent && b.hp > 0.0 && b.kind == BuildingKind::Emplacement)
+            .count();
         if !should_retreat
-            && (threatened || (wave_timer <= 0.0 && (reserves >= 3 || wave_timer <= -4.0)))
+            && (threatened
+                || (wave_timer <= 0.0
+                    && (reserves >= 3 + opposing_guns * 2
+                        || wave_timer <= -4.0 - opposing_guns as f32 * 4.0)))
         {
             for u in &mut self.units {
                 if u.team == team && u.kind != UnitKind::Demolition && u.state == UnitState::Gather
@@ -1078,7 +1093,8 @@ impl Game {
         // Soldiers counter rockets, rockets counter armor, and tanks counter infantry.
         // A baseline of every role prevents a single small scout from pulling the
         // entire army into one unit type.
-        let desired_soldiers = 2.0 + player[1] * 1.3 + player[0] * 0.25;
+        let desired_soldiers =
+            2.0 + player[1] * 1.3 + player[0] * 0.25 + opposing_guns as f32 * 2.0;
         let desired_rockets = 1.0 + player[2] * 1.4 + player[3] * 2.0;
         let desired_tanks = 1.0 + player[0] * 0.55;
         let soldier_need = desired_soldiers - enemy[0];
@@ -1502,9 +1518,24 @@ impl Game {
                 {
                     let desired = (b.x - target.x).atan2(b.z - target.z);
                     let delta = angle_delta(desired, b.facing);
-                    b.facing += delta.clamp(-dt, dt);
+                    b.facing +=
+                        delta.clamp(-dt * EMPLACEMENT_TURN_RATE, dt * EMPLACEMENT_TURN_RATE);
                     if angle_delta(desired, b.facing).abs() <= 0.12 && b.cooldown <= 0.0 {
                         unit_damage[j] += emplacement_damage(target.kind);
+                        // High-explosive shells also catch troops bunched
+                        // around the target. Armor is unaffected by splash.
+                        for (k, other) in snapshot.iter().enumerate() {
+                            if k != j
+                                && other.team != b.team
+                                && other.on_field()
+                                && matches!(other.kind, UnitKind::Soldier | UnitKind::Rocket)
+                                && distance_sq(target.x, target.z, other.x, other.z)
+                                    <= EMPLACEMENT_SPLASH_RADIUS.powi(2)
+                            {
+                                unit_damage[k] +=
+                                    emplacement_damage(other.kind) * EMPLACEMENT_SPLASH_SHARE;
+                            }
+                        }
                         self.shots.push(CombatShot {
                             id: self.next_shot_id,
                             time: self.time,
@@ -1745,7 +1776,7 @@ fn emplacement_damage(kind: UnitKind) -> f32 {
     match kind {
         UnitKind::Tank => 100.0,
         UnitKind::Collector | UnitKind::Demolition => 50.0,
-        UnitKind::Soldier | UnitKind::Rocket => 20.0,
+        UnitKind::Soldier | UnitKind::Rocket => 34.0,
     }
 }
 

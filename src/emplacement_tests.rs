@@ -130,10 +130,11 @@ fn guns_prioritize_armor_need_to_turn_and_ignore_garrisons() {
     game.build_emplacement(0);
     let id = game.buildings.last().unwrap().id;
     game.buildings.last_mut().unwrap().construction_remaining = 0.0;
-    for kind in [UnitKind::Soldier, UnitKind::Tank] {
+    // Far enough apart that the shell's splash does not reach the rifle.
+    for (kind, x) in [(UnitKind::Soldier, -3.0), (UnitKind::Tank, -7.0)] {
         game.spawn(Team::Enemy, kind);
         let unit = game.units.last_mut().unwrap();
-        unit.x = -7.0;
+        unit.x = x;
         unit.z = 20.0;
     }
     game.combat_and_move(0.05);
@@ -224,4 +225,32 @@ fn ai_buys_for_visible_armor_only_with_credits_and_never_holds_back_orders() {
         game.prepare_emplacement(team);
         assert!(!game.alive_building(team, BuildingKind::Emplacement));
     }
+}
+
+#[test]
+fn shells_splash_bunched_infantry_but_not_armor() {
+    let mut game = quiet_game();
+    game.build_emplacement(0);
+    game.buildings.last_mut().unwrap().construction_remaining = 0.0;
+    // The tank is the target; a rifle beside it takes splash, a rifle
+    // further away and a second tank beside it take nothing.
+    for (kind, x) in [
+        (UnitKind::Tank, -7.0),
+        (UnitKind::Soldier, -5.5),
+        (UnitKind::Tank, -8.5),
+        (UnitKind::Soldier, -1.0),
+    ] {
+        game.spawn(Team::Enemy, kind);
+        let unit = game.units.last_mut().unwrap();
+        unit.x = x;
+        unit.z = 20.0;
+    }
+    game.combat_and_move(0.05);
+    let tank_hits = 280.0 - game.units[0].hp + 280.0 - game.units[2].hp;
+    assert_eq!(tank_hits, emplacement_damage(UnitKind::Tank));
+    assert_eq!(
+        game.units[1].hp,
+        100.0 - emplacement_damage(UnitKind::Soldier) * EMPLACEMENT_SPLASH_SHARE
+    );
+    assert_eq!(game.units[3].hp, 100.0);
 }
