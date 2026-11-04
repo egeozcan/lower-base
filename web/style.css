@@ -99,26 +99,37 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--gold);outline-offse
 
 /* Build cameos */
 .build-grid{grid-area:build;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px}
-.cameo{position:relative;height:84px;padding:0;border:1px solid;border-color:var(--void) var(--steel-lo) var(--steel-lo) var(--void);background:radial-gradient(circle at 50% 40%,#1e262b,#0b0e10 75%);color:var(--ink);overflow:hidden;touch-action:manipulation}
-.cameo:not(:disabled):hover{border-color:var(--gold)}
+.cameo{position:relative;height:72px;padding:0;border:1px solid;border-color:#a5a9a3 #050605 #050605 #a5a9a3;border-radius:3px;background:#0b0e10;color:var(--ink);overflow:hidden;touch-action:manipulation}
+.cameo::before{content:'';position:absolute;inset:auto 0 0;height:19px;z-index:1;background:linear-gradient(transparent,rgba(0,0,0,.88) 65%,#050605);pointer-events:none}
+.cameo::after{content:'';position:absolute;inset:0;z-index:2;box-shadow:inset 1px 1px 0 rgba(235,235,215,.35),inset -1px -1px 0 #000,inset 0 0 0 2px rgba(0,0,0,.4);pointer-events:none}
+.cameo:not(:disabled):hover{border-color:var(--gold-hi) var(--gold-deep) var(--gold-deep) var(--gold-hi)}
+.cameo:not(:disabled):hover::after{box-shadow:inset 0 0 0 1px var(--gold),inset 0 0 10px rgba(240,194,75,.28)}
+.cameo:not(:disabled):hover .cameo-icon{filter:brightness(1.08) saturate(1.08)}
 .cameo:not(:disabled):active{transform:translateY(1px)}
 .cameo:disabled{cursor:default}
-.cameo:disabled .cameo-icon{filter:grayscale(.7) brightness(.55)}
-.cameo:disabled .cameo-name,.cameo:disabled .cameo-cost{opacity:.55}
-.cameo-icon{position:absolute;left:50%;top:8px;width:48px;height:48px;margin-left:-24px;filter:drop-shadow(2px 2px 0 #050708)}
-.cameo-name{position:absolute;left:5px;bottom:4px;font:700 11px/1 'Chakra Petch',sans-serif;letter-spacing:.06em}
-.cameo-cost{position:absolute;right:5px;bottom:4px;font:700 13px/1 'Barlow Condensed',sans-serif;color:var(--gold)}
-.cameo-key{position:absolute;left:5px;top:4px;font:600 10px/1 'Chakra Petch',sans-serif;color:var(--muted)}
-.cameo-badge{position:absolute;right:4px;top:4px;min-width:18px;height:18px;padding:0 4px;background:var(--red);color:#fff;font:700 12px/18px 'Barlow Condensed',sans-serif;text-align:center}
-.cameo-flag{position:absolute;right:4px;top:4px;font:700 10px/1 'Chakra Petch',sans-serif;letter-spacing:.04em;color:var(--red-text)}
-.cameo-badge:not([hidden])+.cameo-flag{top:26px}
-.cameo-progress{position:absolute;inset:0;display:none;background:conic-gradient(transparent 0 calc(var(--progress,0) * 100%),rgba(5,7,8,.72) 0 100%);pointer-events:none}
+.cameo:disabled .cameo-icon{filter:grayscale(.68) brightness(.52) contrast(1.05)}
+.cameo:disabled .cameo-name,.cameo:disabled .cameo-cost{opacity:.58}
+.cameo-icon{position:absolute;inset:0;width:100%;height:100%;display:block;background-image:url('./assets/cameos.jpg');background-size:300% 200%;background-repeat:no-repeat;pointer-events:none}
+/* One atlas, ordered left-to-right across each row. */
+.cameo-art-soldier{background-position:0 0}
+.cameo-art-rocket{background-position:50% 0}
+.cameo-art-tank{background-position:100% 0}
+.cameo-art-collector{background-position:0 100%}
+.cameo-art-demolition{background-position:50% 100%}
+.cameo-art-emplacement{background-position:100% 100%}
+#defense-1 .cameo-icon{transform:scaleX(-1)}
+.cameo-name{position:absolute;left:2px;right:2px;bottom:3px;z-index:3;font:700 11px/1 'Barlow Condensed','Arial Narrow',sans-serif;letter-spacing:.03em;text-align:center;white-space:nowrap;color:#fffde8;text-shadow:-1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000,1px 1px 0 #000,0 2px 1px #000}
+.cameo-cost{position:absolute;right:4px;top:4px;z-index:3;padding:1px 3px;background:rgba(7,10,12,.72);font:700 11px/1 'Barlow Condensed',sans-serif;letter-spacing:.02em;color:var(--gold-hi);text-shadow:0 1px 1px #000}
+.cameo-key{position:absolute;left:4px;top:4px;z-index:3;padding:1px 3px;background:rgba(7,10,12,.72);border:1px solid rgba(168,180,190,.28);font:700 9px/1 'Chakra Petch',sans-serif;color:#d7dcdf;text-shadow:0 1px 1px #000}
+.cameo-badge{position:absolute;right:4px;bottom:17px;z-index:3;min-width:18px;height:18px;padding:0 4px;border:1px solid #ff9e90;background:linear-gradient(#d92b1e,#85160e);color:#fff;font:700 12px/16px 'Barlow Condensed',sans-serif;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.75)}
+.cameo-flag{position:absolute;left:4px;bottom:17px;z-index:3;padding:2px 3px;background:rgba(8,10,12,.8);border:1px solid rgba(255,122,107,.4);font:700 9px/1 'Chakra Petch',sans-serif;letter-spacing:.04em;color:var(--red-text);text-shadow:0 1px 2px #000}
+.cameo-progress{position:absolute;inset:0;z-index:1;display:none;background:conic-gradient(rgba(255,229,154,.1) 0 calc(var(--progress,0) * 100%),rgba(5,7,9,.76) calc(var(--progress,0) * 100%) 100%);box-shadow:inset 0 0 0 1px rgba(240,194,75,.5);pointer-events:none}
 .cameo.is-building .cameo-progress{display:block}
 .cameo.is-building{border-color:var(--gold) var(--gold-deep) var(--gold-deep) var(--gold)}
 .cameo.online .cameo-cost{font:700 10px/1 'Chakra Petch',sans-serif;letter-spacing:.08em;color:var(--green)}
-.cameo.online:disabled .cameo-icon{filter:drop-shadow(2px 2px 0 #050708)}
+.cameo.online:disabled .cameo-icon{filter:none}
 .cameo.online:disabled .cameo-name,.cameo.online:disabled .cameo-cost,.cameo.is-building:disabled .cameo-name,.cameo.is-building:disabled .cameo-cost{opacity:1}
-.cameo-blank{height:84px;background:repeating-linear-gradient(135deg,#0d1012 0 6px,#14181b 6px 12px)}
+.cameo-blank{height:72px;background:repeating-linear-gradient(135deg,#0d1012 0 6px,#14181b 6px 12px)}
 
 .economy{grid-area:econ;margin:0;font:600 10px/1.4 'Chakra Petch',sans-serif;letter-spacing:.06em;color:var(--muted)}
 .emblem{grid-area:emblem;min-height:0;margin:0 -8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;overflow:hidden;border-top:1px solid var(--void);box-shadow:inset 0 1px 0 var(--steel-lo);background:repeating-linear-gradient(0deg,#22272a 0 3px,#1a1e21 3px 6px)}
@@ -178,12 +189,10 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--gold);outline-offse
   #app{row-gap:6px}
   .radar{height:140px}
   .cameo,.cameo-blank{height:70px}
-  .cameo-icon{top:5px;width:40px;height:40px;margin-left:-20px}
 }
 @media (min-width:701px) and (max-height:680px){
   .radar{height:112px}
   .cameo,.cameo-blank{height:60px}
-  .cameo-icon{top:4px;width:34px;height:34px;margin-left:-17px}
   .economy{display:none}
   .credits-row{height:36px}#credits{font-size:24px}
 }
@@ -241,8 +250,7 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--gold);outline-offse
   #selected-count{font-size:20px}
   .build-grid{grid-area:build;display:flex;gap:4px;padding:6px 6px max(22px,env(safe-area-inset-bottom));overflow-x:auto;scrollbar-width:none;overscroll-behavior-x:contain}
   .build-grid::-webkit-scrollbar{display:none}
-  .cameo{flex:none;width:76px;height:76px}
-  .cameo-icon{top:6px;width:40px;height:40px;margin-left:-20px}
+  .cameo{flex:none;width:76px;height:64px}
   .cameo-name{left:4px;font-size:10px;letter-spacing:0}
   .cameo-cost{right:4px;font-size:12px}
   .cameo-key,.cameo-blank,.economy,.emblem{display:none}
@@ -300,7 +308,6 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--gold);outline-offse
   .build-grid{grid-area:build;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;padding:0;overflow:visible}
   .cameo{width:auto;height:64px}
   .cameo-blank{display:block;height:64px}
-  .cameo-icon{top:4px;width:36px;height:36px;margin-left:-18px}
   .cameo-name{left:4px;font-size:10px;letter-spacing:0}
   .cameo-cost{right:4px;font-size:12px}
   .cameo-key,.economy,.emblem{display:none}

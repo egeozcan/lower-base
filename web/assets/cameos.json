@@ -1,0 +1,16 @@
+{
+  "generator": "Built-in image_gen",
+  "prompt": "Use case: stylized-concept. Asset type: one game UI sprite atlas for Lower Base, an RTS. Create a single rectangular image atlas laid out as EXACTLY 3 equal columns and 2 equal rows, six edge-to-edge panels, no gaps or outer margin. Overall aspect ratio 2:1; each panel aspect ratio 4:3. Style: Command & Conquer Red Alert 2 sidebar cameos, circa 2000: gritty photomontage and pre-rendered military miniature realism, coarse dithered texture, tightly framed readable silhouettes, hard contrast, pale blue or smoky skies, olive/steel vehicles, natural human faces, punchy tiny-thumbnail composition. Not vector, not flat cartoon, not clean modern digital illustration, not decorative cards. Top-left: close head-and-shoulders portrait of helmeted rifle infantryman in olive military uniform holding rifle, stern face occupying much of tile, blue sky. Top-center: helmeted rocket trooper in heavy olive vest with large shoulder rocket launcher across frame, warm smoke behind. Top-right: massive double-barrel siege tank, three-quarter frontal view, chunky treads, steel olive armor with subtle cobalt blue markings, pale cloudy battlefield sky. Bottom-left: armored ore harvester with industrial yellow panels, chunky wheels, ore hopper and front collection mechanism, industrial quarry background. Bottom-center: demolition truck with cylindrical yellow explosive cargo and hazard stripes, three-quarter view, red-orange smoky sky. Bottom-right: fixed anti-tank gun emplacement with long single cannon barrel, sloped steel shield and blue accent on concrete circular base, pale cloudy sky. Each subject should fill its own panel, with critical features in center 85%; each scene entirely separate from neighbors. NO text, letters, labels, numbers, frames, borders, logos or watermark: those will be drawn by the application. All six panels must share consistent richly textured old-school RTS cameo rendering.",
+  "layout": {
+    "columns": 3,
+    "rows": 2,
+    "tiles": [
+      "soldier",
+      "rocket",
+      "tank",
+      "collector",
+      "demolition",
+      "emplacement"
+    ]
+  }
+}

@@ -7,11 +7,21 @@ import { Vector3 } from './three.module.js';
 const $ = id => document.getElementById(id);
 const selected = new Set();
 const specs = [
-  { kind: 'soldier', short: 'RIFLE', name: 'RIFLE INFANTRY', cost: 60, icon: '<svg viewBox="0 0 48 48"><path fill="#c9b286" d="M18 15h13v13H18z"/><path fill="#6484bc" d="M13 17q0-15 11-15t12 15zM8 44V31l11-6h11l10 6v13z"/><path fill="#243126" d="M18 28h4v16h-4zm10 0h4v16h-4z"/><path stroke="#d5c69d" stroke-width="4" d="m8 39 34-12"/></svg>', key: '3' },
-  { kind: 'rocket', short: 'ROCKET', name: 'ROCKET TROOPER', cost: 90, icon: '<svg viewBox="0 0 48 48"><path fill="#252b24" d="M15 36h7v10h-7zm10 0h7v10h-7z"/><path fill="#5f6b72" d="M12 20h22v18H12z"/><path fill="#6484bc" d="M9 18h9v6H9zm19 0h9v6h-9zM15 25h16v7H15z"/><path fill="#56646c" d="M17 7h12v12H17z"/><path fill="#ffa040" d="M18 11h10v3H18z"/><path fill="#55603c" d="M26 9h20v10H26z"/><path fill="#d8392a" d="M42 10h4v3h-4zm0 5h4v3h-4z"/></svg>', key: '4' },
-  { kind: 'tank', short: 'TANK', name: 'SIEGE TANK', cost: 150, icon: '<svg viewBox="0 0 48 48"><path fill="#252b24" d="M3 30h42v13H3z"/><path fill="#858979" d="M8 35h4v4H8zm8 0h4v4h-4zm8 0h4v4h-4zm8 0h4v4h-4zm8 0h4v4h-4z"/><path fill="#8c9aa1" d="M4 24h36l6 6H4z"/><path fill="#6484bc" d="M3 29h42v3H3z"/><path fill="#8c9aa1" d="m12 23 3-8h15l4 8z"/><path fill="#6484bc" d="M14 15h17v3H14z"/><path stroke="#c9c6b0" stroke-width="2.5" d="M30 16 46 9M30 20l16-6"/></svg>', key: '5' },
-  { kind: 'demolition', short: 'DEMO', name: 'DEMOLITION TRUCK', cost: 250, icon: '<svg viewBox="0 0 48 48"><path fill="#252b24" d="M2 32h44v5H2z"/><path fill="#6484bc" d="M2 17h12v15H2z"/><path fill="#1c2a33" d="M3 19h6v6H3z"/><rect fill="#e3b437" x="16" y="14" width="30" height="17" rx="8"/><path fill="#3a2f27" d="M21 14h3v17h-3zm16 0h3v17h-3z"/><path fill="#b5301f" d="M29 14h3v17h-3z"/><path fill="#ff6b28" d="M6 14h4v3H6z"/><circle fill="#161e1b" cx="9" cy="38" r="5"/><circle fill="#161e1b" cx="27" cy="38" r="5"/><circle fill="#161e1b" cx="39" cy="38" r="5"/></svg>', key: '7' },
-  { kind: 'collector', short: 'HARVEST', name: 'ORE COLLECTOR', cost: 200, icon: '<svg viewBox="0 0 48 48"><path fill="#252b24" d="M5 32h38v12H5z"/><path fill="#858979" d="M9 36h4v4H9zm8 0h4v4h-4zm8 0h4v4h-4zm8 0h4v4h-4z"/><path fill="#8c9aa1" d="M16 12h28l-2 20H18z"/><path fill="#6484bc" d="M15 10h30v3H15z"/><path fill="#e9bd4c" d="m19 12 5-6 6 3 5-5 5 8z"/><path fill="#6484bc" d="M6 18h10v12H6z"/><path fill="#1c2a33" d="M8 20h7v4H8z"/><path fill="#e3b437" d="M0 44 6 34h3l-4 10z"/></svg>', key: '6' },
+  {
+    kind: 'soldier', short: 'RIFLE INFANTRY', name: 'RIFLE INFANTRY', cost: 60, key: '3',
+  },
+  {
+    kind: 'rocket', short: 'ROCKET TROOPER', name: 'ROCKET TROOPER', cost: 90, key: '4',
+  },
+  {
+    kind: 'tank', short: 'SIEGE TANK', name: 'SIEGE TANK', cost: 150, key: '5',
+  },
+  {
+    kind: 'demolition', short: 'DEMO TRUCK', name: 'DEMOLITION TRUCK', cost: 250, key: '7',
+  },
+  {
+    kind: 'collector', short: 'ORE COLLECTOR', name: 'ORE COLLECTOR', cost: 200, key: '6',
+  },
 ];
 let game, renderer, snapshot, lastTime = 0, ended = false, paused = false, demo = false;
 const SPEEDS = [0.5, 1, 2, 4];
@@ -124,7 +134,7 @@ function createProduction() {
     collector: ' — automatically mines ore and delivers credits to your refinery',
     demolition: ' — 6s build, 140 HP. Waits ahead of your line and strikes groups near it; Send it to hit the best target anywhere. Explodes when it strikes or is destroyed: up to 450 damage, radius 7, damages allies. One fielded or queued.',
   };
-  const html = cameoOrder.map(kind => specs.find(s => s.kind === kind)).map(s => `<button type="button" class="cameo" id="train-${s.kind}" title="Queue ${s.name}, ${s.cost} credits (${s.key})${notes[s.kind] || ''}">${s.icon.replace('<svg', '<svg class="cameo-icon" aria-hidden="true"')}<span class="cameo-progress" aria-hidden="true"></span><span class="cameo-key" aria-hidden="true">${s.key}</span><span class="cameo-name">${s.short}</span><small class="cameo-cost">${s.cost}</small><span class="cameo-badge" hidden></span>${s.kind === 'demolition' ? '<span id="demolition-status" class="cameo-flag">1×</span>' : ''}</button>`).join('');
+  const html = cameoOrder.map(kind => specs.find(s => s.kind === kind)).map(s => `<button type="button" class="cameo" id="train-${s.kind}" title="Queue ${s.name}, ${s.cost} credits (${s.key})${notes[s.kind] || ''}"><span class="cameo-icon cameo-art-${s.kind}" aria-hidden="true"></span><span class="cameo-progress" aria-hidden="true"></span><span class="cameo-key" aria-hidden="true">${s.key}</span><span class="cameo-name">${s.short}</span><small class="cameo-cost">${s.cost}</small><span class="cameo-badge" hidden></span>${s.kind === 'demolition' ? '<span id="demolition-status" class="cameo-flag">1×</span>' : ''}</button>`).join('');
   $('production').insertAdjacentHTML('afterbegin', html);
   for (const s of specs) $(`train-${s.kind}`).addEventListener('click', () => train(s.kind));
 }
