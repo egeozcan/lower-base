@@ -599,7 +599,10 @@ fn steer(intent: &Intent, neighbors: &[Neighbor], lanes: &[Lane], hull: &[Block]
     for (turn, fractions) in TURNS {
         let (sin, cos) = turn.sin_cos();
         for side in [hand, -hand] {
-            if side < 0.0 && (turn == 0.0 || turn == std::f32::consts::PI) {
+            // Straight ahead and reversing are the same on either side: keep
+            // the preferred-side copy for both teams, so the mirrored bases
+            // price every heading alike.
+            if side != hand && (turn == 0.0 || turn == std::f32::consts::PI) {
                 continue;
             }
             let heading = (

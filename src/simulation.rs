@@ -19,6 +19,12 @@ mod emplacement_tests;
 #[path = "navigation.rs"]
 mod navigation;
 #[cfg(any(test, feature = "ai-bench"))]
+#[path = "standard_benchmark.rs"]
+pub mod standard_benchmark;
+#[cfg(test)]
+#[path = "standard_tests.rs"]
+mod standard_tests;
+#[cfg(any(test, feature = "ai-bench"))]
 #[path = "stock_hard.rs"]
 mod stock_hard;
 #[cfg(any(test, feature = "ai-bench"))]
@@ -34,6 +40,11 @@ const COLLECTOR_CAPACITY: f32 = 100.0;
 const MINING_RATE: f32 = 25.0;
 const STARTING_CREDITS: f32 = 500.0;
 const PASSIVE_INCOME: f32 = 24.0;
+// Standard matches start from a lone command center: enough credits for a
+// refinery and one production building, and a small trickle so a side whose
+// economy was wiped out is never permanently stuck.
+const STANDARD_STARTING_CREDITS: f32 = 1500.0;
+const STANDARD_PASSIVE_INCOME: f32 = 5.0;
 const CREDIT_CAP: f32 = 2000.0;
 const EMPLACEMENT_COST: f32 = 200.0;
 const EMPLACEMENT_BUILD_TIME: f32 = 8.0;
@@ -85,6 +96,40 @@ impl Difficulty {
             Self::Easy => 4.0,
             Self::Medium => 1.0,
             Self::Hard => 0.5,
+        }
+    }
+}
+
+/// The ruleset a match is played under. Independent of [`Difficulty`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GameMode {
+    /// Full bases from the start, large passive income, only guns to construct.
+    #[default]
+    Deathmatch,
+    /// A lone command center that constructs the rest of the base on sites.
+    Standard,
+}
+
+impl GameMode {
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "standard" => Self::Standard,
+            _ => Self::Deathmatch,
+        }
+    }
+
+    fn starting_credits(self) -> f32 {
+        match self {
+            Self::Deathmatch => STARTING_CREDITS,
+            Self::Standard => STANDARD_STARTING_CREDITS,
+        }
+    }
+
+    fn passive_income(self) -> f32 {
+        match self {
+            Self::Deathmatch => PASSIVE_INCOME,
+            Self::Standard => STANDARD_PASSIVE_INCOME,
         }
     }
 }
@@ -219,6 +264,67 @@ pub enum BuildingKind {
     Emplacement,
 }
 
+impl BuildingKind {
+    /// Structures a command center constructs on their own site in Standard.
+    pub const SITE_STRUCTURES: [Self; 3] = [Self::Refinery, Self::Barracks, Self::Factory];
+
+    fn parse_structure(s: &str) -> Option<Self> {
+        match s {
+            "barracks" => Some(Self::Barracks),
+            "factory" => Some(Self::Factory),
+            "refinery" => Some(Self::Refinery),
+            _ => None,
+        }
+    }
+    fn health(self) -> f32 {
+        match self {
+            Self::Command => 1400.0,
+            Self::Barracks => 800.0,
+            Self::Factory => 1000.0,
+            Self::Refinery => 900.0,
+            Self::Emplacement => EMPLACEMENT_HEALTH,
+        }
+    }
+    /// Construction price; a refinery includes its free collector.
+    fn cost(self) -> f32 {
+        match self {
+            Self::Barracks => 400.0,
+            Self::Refinery => 600.0,
+            Self::Factory => 800.0,
+            Self::Emplacement => EMPLACEMENT_COST,
+            Self::Command => f32::INFINITY,
+        }
+    }
+    fn build_time(self) -> f32 {
+        match self {
+            Self::Barracks => 15.0,
+            Self::Refinery => 20.0,
+            Self::Factory => 25.0,
+            Self::Emplacement => EMPLACEMENT_BUILD_TIME,
+            Self::Command => f32::INFINITY,
+        }
+    }
+    /// The fixed spot of each base building, also its site in Standard.
+    fn home(self, team: Team) -> (f32, f32) {
+        let z = if team == Team::Player { 43.0 } else { -43.0 };
+        match self {
+            Self::Barracks => (-10.0, z),
+            Self::Factory => (10.0, z),
+            Self::Refinery => (0.0, z.signum() * 50.0),
+            Self::Command | Self::Emplacement => (0.0, z),
+        }
+    }
+}
+
+/// A fixed, marked spot where one specific structure can be constructed.
+#[derive(Clone, Copy, Serialize)]
+pub struct Site {
+    pub team: Team,
+    pub kind: BuildingKind,
+    pub x: f32,
+    pub z: f32,
+}
+
 #[derive(Clone, Copy, Serialize)]
 pub struct DefenseSlot {
     pub team: Team,
@@ -286,6 +392,8 @@ pub struct Building {
     pub max_hp: f32,
     pub defense_slot: Option<usize>,
     pub construction_remaining: f32,
+    /// Total construction time, for progress displays; zero for starting buildings.
+    pub construction_time: f32,
     pub facing: f32,
     #[serde(skip)]
     cooldown: f32,
@@ -335,6 +443,7 @@ pub struct Game {
     pub time: f32,
     pub demo: bool,
     pub difficulty: Difficulty,
+    pub game_mode: GameMode,
     pub credits: f32,
     pub mode: Mode,
     pub enemy_mode: Mode,
@@ -342,6 +451,7 @@ pub struct Game {
     pub units: Vec<Unit>,
     pub buildings: Vec<Building>,
     pub defense_slots: Vec<DefenseSlot>,
+    pub sites: Vec<Site>,
     pub ore: Vec<OreDeposit>,
     pub barracks_queue: Vec<UnitKind>,
     pub factory_queue: Vec<UnitKind>,
@@ -413,11 +523,15 @@ impl Game {
         Self::with_difficulty(seed, Difficulty::Medium)
     }
     pub fn with_difficulty(seed: u32, difficulty: Difficulty) -> Self {
+        Self::with_options(seed, difficulty, GameMode::Deathmatch)
+    }
+    pub fn with_options(seed: u32, difficulty: Difficulty, game_mode: GameMode) -> Self {
         let mut g = Self {
             time: 0.0,
             demo: false,
             difficulty,
-            credits: STARTING_CREDITS,
+            game_mode,
+            credits: game_mode.starting_credits(),
             mode: Mode::Gather,
             enemy_mode: Mode::Gather,
             outcome: Outcome::Playing,
@@ -437,6 +551,7 @@ impl Game {
                         })
                 })
                 .collect(),
+            sites: Vec::new(),
             ore: Vec::new(),
             barracks_queue: vec![],
             factory_queue: vec![],
@@ -456,18 +571,32 @@ impl Game {
             ai_decision_timer: 0.0,
             ai_wave_timer: 7.0,
             demo_wave_timer: 7.0,
-            ai_credits: STARTING_CREDITS,
+            ai_credits: game_mode.starting_credits(),
             hard_commanders: [
                 ai::HardCommander::new(seed ^ 0xa341316c),
                 ai::HardCommander::new(seed ^ 0xc8013ea4),
             ],
         };
         for team in [Team::Player, Team::Enemy] {
-            let z = if team == Team::Player { 43.0 } else { -43.0 };
-            g.add_building(team, BuildingKind::Command, 0.0, z, 1400.0);
-            g.add_building(team, BuildingKind::Barracks, -10.0, z, 800.0);
-            g.add_building(team, BuildingKind::Factory, 10.0, z, 1000.0);
-            g.add_building(team, BuildingKind::Refinery, 0.0, z.signum() * 50.0, 900.0);
+            let (x, z) = BuildingKind::Command.home(team);
+            g.add_building(
+                team,
+                BuildingKind::Command,
+                x,
+                z,
+                BuildingKind::Command.health(),
+            );
+            if game_mode == GameMode::Standard {
+                for kind in BuildingKind::SITE_STRUCTURES {
+                    let (x, z) = kind.home(team);
+                    g.sites.push(Site { team, kind, x, z });
+                }
+                continue;
+            }
+            for kind in BuildingKind::SITE_STRUCTURES {
+                let (x, z) = kind.home(team);
+                g.add_building(team, kind, x, z, kind.health());
+            }
             for kind in [
                 UnitKind::Soldier,
                 UnitKind::Soldier,
@@ -484,7 +613,10 @@ impl Game {
         Self::demo_with_difficulty(seed, Difficulty::Medium)
     }
     pub fn demo_with_difficulty(seed: u32, difficulty: Difficulty) -> Self {
-        let mut game = Self::with_difficulty(seed, difficulty);
+        Self::demo_with_options(seed, difficulty, GameMode::Deathmatch)
+    }
+    pub fn demo_with_options(seed: u32, difficulty: Difficulty, game_mode: GameMode) -> Self {
+        let mut game = Self::with_options(seed, difficulty, game_mode);
         game.demo = true;
         game.credits = game.ai_credits;
         game
@@ -496,13 +628,14 @@ impl Game {
             (seed as f64 / 4294967296.0) as f32
         };
         // Three bands, on both flanks, guarantee accessible starting ore and
-        // contested deposits. Rotate each deposit 180 degrees for equal access.
+        // contested deposits. Mirror each deposit across the midline, like the
+        // bases and steering, so both sides face exactly the same map.
         for band in 0..3 {
             for side in [-1.0, 1.0] {
                 let x = side * (9.0 + random() * 5.0);
                 let z = 7.0 + band as f32 * 10.0 + random() * 4.0;
                 let amount = 1400.0 + (random() * 800.0).floor();
-                for (x, z) in [(x, z), (-x, -z)] {
+                for (x, z) in [(x, z), (x, -z)] {
                     let id = self.id();
                     self.ore.push(OreDeposit {
                         id,
@@ -532,6 +665,7 @@ impl Game {
             max_hp: hp,
             defense_slot: None,
             construction_remaining: 0.0,
+            construction_time: 0.0,
             facing: if team == Team::Player {
                 0.0
             } else {
@@ -585,7 +719,85 @@ impl Game {
         let gun = self.buildings.last_mut().unwrap();
         gun.defense_slot = Some(slot);
         gun.construction_remaining = EMPLACEMENT_BUILD_TIME;
+        gun.construction_time = EMPLACEMENT_BUILD_TIME;
         true
+    }
+
+    /// Construct a barracks, factory or refinery on its site (Standard only).
+    pub fn construct(&mut self, kind: &str) {
+        if self.demo {
+            return;
+        }
+        if let Some(kind) = BuildingKind::parse_structure(kind) {
+            self.construct_for(Team::Player, kind);
+        }
+    }
+
+    /// The structure a side's command center is building, if any. Guns build
+    /// on their own pads and never occupy the command center.
+    fn active_construction(&self, team: Team) -> Option<&Building> {
+        self.buildings.iter().find(|b| {
+            b.team == team
+                && b.hp > 0.0
+                && b.kind != BuildingKind::Emplacement
+                && b.construction_remaining > 0.0
+        })
+    }
+
+    // One path for human and AI orders. Paid up front; no queue and no cancel.
+    fn construct_for(&mut self, team: Team, kind: BuildingKind) -> bool {
+        let Some(site) = self
+            .sites
+            .iter()
+            .find(|s| s.team == team && s.kind == kind)
+            .copied()
+        else {
+            return false;
+        };
+        if self.outcome != Outcome::Playing
+            || !self.alive_building(team, BuildingKind::Command)
+            || self.standing(team, kind)
+            || self.active_construction(team).is_some()
+        {
+            return false;
+        }
+        let credits = if team == Team::Player {
+            &mut self.credits
+        } else {
+            &mut self.ai_credits
+        };
+        if *credits < kind.cost() {
+            return false;
+        }
+        *credits -= kind.cost();
+        self.add_building(team, kind, site.x, site.z, kind.health());
+        let structure = self.buildings.last_mut().unwrap();
+        structure.construction_remaining = kind.build_time();
+        structure.construction_time = kind.build_time();
+        true
+    }
+
+    /// Advance site construction. Each finished refinery brings one collector.
+    fn advance_construction(&mut self, dt: f32) {
+        let mut refineries = Vec::new();
+        for b in &mut self.buildings {
+            if b.kind == BuildingKind::Emplacement || b.construction_remaining <= 0.0 {
+                continue;
+            }
+            b.construction_remaining = (b.construction_remaining - dt).max(0.0);
+            if b.construction_remaining <= 0.0 && b.kind == BuildingKind::Refinery && b.hp > 0.0 {
+                refineries.push((b.team, b.x, b.z));
+            }
+        }
+        for (team, x, z) in refineries {
+            self.spawn(team, UnitKind::Collector);
+            let collector = self.units.last_mut().unwrap();
+            // It starts mining at once, even during Retreat.
+            collector.garrison = None;
+            collector.state = UnitState::Harvest;
+            collector.x = x + 6.5;
+            collector.z = z;
+        }
     }
 
     fn spawn(&mut self, team: Team, kind: UnitKind) {
@@ -775,7 +987,15 @@ impl Game {
                 self.enemy_factory_queue.contains(&UnitKind::Demolition)
             }
     }
+    /// A finished, standing building of this kind: one that can produce,
+    /// accept ore or construct. Structures under construction do not count.
     fn alive_building(&self, team: Team, kind: BuildingKind) -> bool {
+        self.buildings.iter().any(|b| {
+            b.team == team && b.kind == kind && b.hp > 0.0 && b.construction_remaining <= 0.0
+        })
+    }
+    /// A standing building of this kind, finished or under construction.
+    fn standing(&self, team: Team, kind: BuildingKind) -> bool {
         self.buildings
             .iter()
             .any(|b| b.team == team && b.kind == kind && b.hp > 0.0)
@@ -795,8 +1015,10 @@ impl Game {
         self.time += dt;
         self.shots.retain(|shot| self.time - shot.time < 1.0);
         self.explosions.retain(|blast| self.time - blast.time < 1.0);
-        self.credits = (self.credits + PASSIVE_INCOME * dt).min(CREDIT_CAP);
-        self.ai_credits = (self.ai_credits + PASSIVE_INCOME * dt).min(CREDIT_CAP);
+        let income = self.game_mode.passive_income() * dt;
+        self.credits = (self.credits + income).min(CREDIT_CAP);
+        self.ai_credits = (self.ai_credits + income).min(CREDIT_CAP);
+        self.advance_construction(dt);
         self.harvest_and_unload(dt);
         self.ai_decision_timer -= dt;
         self.ai_wave_timer -= dt;
@@ -938,11 +1160,55 @@ impl Game {
     // Both demo commanders use the same production and wave strategy, viewed
     // from their own end of the map. Normal matches still run only the enemy AI.
     fn ai_decide_for(&mut self, team: Team) {
+        // Standard: every difficulty shares one build order, then plays as usual
+        // with the next structure's price held back from unit and gun spending.
+        let reserve = self.ai_construct(team);
+        self.adjust_credits(team, -reserve);
         match self.difficulty {
             Difficulty::Easy => self.ai_easy(team),
             Difficulty::Medium => self.ai_medium(team),
             Difficulty::Hard => self.ai_hard(team),
         }
+        self.adjust_credits(team, reserve);
+    }
+
+    /// Construct the first missing structure in build order once affordable,
+    /// rebuilding losses the same way. Returns the credits to hold back for it.
+    fn ai_construct(&mut self, team: Team) -> f32 {
+        if self.game_mode != GameMode::Standard || !self.alive_building(team, BuildingKind::Command)
+        {
+            return 0.0;
+        }
+        let Some(next) = BuildingKind::SITE_STRUCTURES
+            .into_iter()
+            .find(|&kind| !self.standing(team, kind))
+        else {
+            return 0.0;
+        };
+        let mut next = Some(next);
+        if self.active_construction(team).is_none() && self.construct_for(team, next.unwrap()) {
+            next = BuildingKind::SITE_STRUCTURES
+                .into_iter()
+                .find(|&kind| !self.standing(team, kind));
+        }
+        let credits = if team == Team::Player {
+            self.credits
+        } else {
+            self.ai_credits
+        };
+        next.map_or(0.0, |kind| kind.cost().min(credits))
+    }
+
+    fn adjust_credits(&mut self, team: Team, amount: f32) {
+        if amount == 0.0 {
+            return;
+        }
+        let credits = if team == Team::Player {
+            &mut self.credits
+        } else {
+            &mut self.ai_credits
+        };
+        *credits += amount;
     }
 
     fn ai_medium(&mut self, team: Team) {
@@ -1190,7 +1456,12 @@ impl Game {
             let refinery = self
                 .buildings
                 .iter()
-                .filter(|b| b.team == unit.team && b.kind == BuildingKind::Refinery && b.hp > 0.0)
+                .filter(|b| {
+                    b.team == unit.team
+                        && b.kind == BuildingKind::Refinery
+                        && b.hp > 0.0
+                        && b.construction_remaining <= 0.0
+                })
                 .min_by(|a, b| {
                     distance_sq(unit.x, unit.z, a.x, a.z)
                         .total_cmp(&distance_sq(unit.x, unit.z, b.x, b.z))
@@ -3073,12 +3344,56 @@ mod tests {
     }
 
     #[test]
+    fn mirror_demos_stay_exactly_symmetric() {
+        // With identical commanders, each side must see a mirror image of the
+        // other's situation and act identically: a match may not favor a side.
+        let side = |g: &Game, team: Team| {
+            let sign = if team == Team::Player { 1.0 } else { -1.0 };
+            let mut state: Vec<String> =
+                g.units
+                    .iter()
+                    .filter(|u| u.team == team)
+                    .map(|u| {
+                        format!(
+                            "{:?} {:.4} {:.4} {:.2} {:?} {:.2}",
+                            u.kind,
+                            u.x,
+                            u.z * sign,
+                            u.hp,
+                            u.state,
+                            u.cargo
+                        )
+                    })
+                    .chain(g.buildings.iter().filter(|b| b.team == team).map(|b| {
+                        format!("{:?} {:.2} {:.2}", b.kind, b.hp, b.construction_remaining)
+                    }))
+                    .collect();
+            state.sort();
+            state
+        };
+        for game_mode in [GameMode::Deathmatch, GameMode::Standard] {
+            for seed in [3, 26] {
+                let mut g = Game::demo_with_options(seed, Difficulty::Medium, game_mode);
+                while g.time < 240.0 && g.outcome == Outcome::Playing {
+                    g.update(0.05);
+                    assert_eq!(
+                        side(&g, Team::Player),
+                        side(&g, Team::Enemy),
+                        "{game_mode:?} seed {seed} diverged at {:.2}s",
+                        g.time
+                    );
+                    assert_eq!(g.credits, g.ai_credits);
+                }
+            }
+        }
+    }
+    #[test]
     fn ore_is_seeded_symmetric_and_clear_of_starting_buildings() {
         for seed in 0..128 {
             let g = Game::with_seed(seed);
             assert_eq!(g.ore.len(), 12);
             for pair in g.ore.chunks_exact(2) {
-                assert_eq!(pair[0].x, -pair[1].x);
+                assert_eq!(pair[0].x, pair[1].x);
                 assert_eq!(pair[0].z, -pair[1].z);
                 assert_eq!(pair[0].amount, pair[1].amount);
                 assert!((1400.0..=2200.0).contains(&pair[0].amount));

@@ -85,8 +85,36 @@ fn main() {
         println!("{}", serde_json::to_string_pretty(&runs).unwrap());
         return;
     }
+    if args.first().is_some_and(|arg| arg == "--game-mode") {
+        let game_mode = match args.get(1).map(String::as_str) {
+            Some("standard") => lower_base::simulation::GameMode::Standard,
+            Some("deathmatch") => lower_base::simulation::GameMode::Deathmatch,
+            _ => panic!("--game-mode takes standard or deathmatch"),
+        };
+        let number = |i: usize, default: u32| -> u32 {
+            args.get(i)
+                .map(|s| s.parse().expect("expected an unsigned integer"))
+                .unwrap_or(default)
+        };
+        let count = number(2, 8);
+        let first = number(3, 0);
+        let seconds = number(4, 600) as f32;
+        let runs = lower_base::simulation::standard_benchmark::runs(
+            first..first + count,
+            seconds,
+            game_mode,
+        );
+        for r in &runs {
+            eprintln!(
+                "{:?} seed {}: {:?} at {:.0}s, base complete {:?}, rebuilds {:?}",
+                r.difficulty, r.seed, r.outcome, r.seconds, r.base_complete, r.rebuilds
+            );
+        }
+        println!("{}", serde_json::to_string_pretty(&runs).unwrap());
+        return;
+    }
     if args.iter().any(|arg| arg == "--help") {
-        println!("ai-bench [seed-count=12] [first-seed=0] [max-seconds=360] [standard|rush|balanced|stock|player-armor|interception|mixed-wave|tank-opening|all]\nstock: five original scenarios; player-armor: three recordings and four automated tank strategies; interception: an unopposed infantry wave; mixed-wave: two recordings and three mixed-army attacks; tank-opening: a recording and three armor-first infantry rushes; all: all twenty-two scenarios.\nai-bench --balance runs 72 equal-credit counter battles.\nai-bench --traffic measures collector deliveries and group movement under traffic.\nai-bench --trucks scores demolition-truck strikes and line defenses.\nai-bench --defense runs gun-backed defender duels against equal mirror armies.\nPrints JSON; timeouts count as draws.");
+        println!("ai-bench [seed-count=12] [first-seed=0] [max-seconds=360] [standard|rush|balanced|stock|player-armor|interception|mixed-wave|tank-opening|all]\nstock: five original scenarios; player-armor: three recordings and four automated tank strategies; interception: an unopposed infantry wave; mixed-wave: two recordings and three mixed-army attacks; tank-opening: a recording and three armor-first infantry rushes; all: all twenty-two scenarios.\nai-bench --balance runs 72 equal-credit counter battles.\nai-bench --traffic measures collector deliveries and group movement under traffic.\nai-bench --trucks scores demolition-truck strikes and line defenses.\nai-bench --defense runs gun-backed defender duels against equal mirror armies.\nai-bench --game-mode standard|deathmatch [seed-count=8] [first-seed=0] [max-seconds=600] runs mirror demos at each difficulty.\nAll other runs use Deathmatch.\nPrints JSON; timeouts count as draws.");
         return;
     }
     let number = |i: usize, default: u32| -> u32 {

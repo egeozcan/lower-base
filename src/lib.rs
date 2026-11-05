@@ -2,7 +2,7 @@
 
 pub mod simulation;
 
-use simulation::{Difficulty, Game};
+use simulation::{Difficulty, Game, GameMode};
 use wasm_bindgen::prelude::*;
 
 /// Browser-facing wrapper around the game simulation.
@@ -37,6 +37,18 @@ impl GameBridge {
         }
     }
 
+    pub fn with_options(seed: u32, difficulty: &str, game_mode: &str, demo: bool) -> GameBridge {
+        let difficulty = Difficulty::parse(difficulty);
+        let game_mode = GameMode::parse(game_mode);
+        Self {
+            game: if demo {
+                Game::demo_with_options(seed, difficulty, game_mode)
+            } else {
+                Game::with_options(seed, difficulty, game_mode)
+            },
+        }
+    }
+
     pub fn update(&mut self, dt: f32) {
         self.game.update(dt);
     }
@@ -51,6 +63,10 @@ impl GameBridge {
 
     pub fn build_emplacement(&mut self, slot: usize) {
         self.game.build_emplacement(slot);
+    }
+
+    pub fn construct(&mut self, kind: &str) {
+        self.game.construct(kind);
     }
 
     pub fn cancel_training(&mut self, building: &str, index: usize) {

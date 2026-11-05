@@ -10,8 +10,9 @@ if (!path || options.some(option => !['--verify', '--expect-ai-win'].includes(op
 const report = JSON.parse(await readFile(path, 'utf8'));
 assert.equal(report.schema_version, 1);
 await init({ module_or_path: await readFile(new URL('../web/pkg/lower_base_bg.wasm', import.meta.url)) });
-const { seed, difficulty, demo } = report.metadata;
-const game = GameBridge.with_difficulty(seed, difficulty, demo);
+// Recordings from before game modes were added are Deathmatch matches.
+const { seed, difficulty, demo, game_mode = 'deathmatch' } = report.metadata;
+const game = GameBridge.with_options(seed, difficulty, game_mode, demo);
 try {
   let nextCommand = 0;
   for (let tick = 0; tick < report.updates.length; tick++) {
@@ -19,6 +20,7 @@ try {
       const { action, args } = report.commands[nextCommand++];
       if (action === 'train') game.train(args.kind);
       else if (action === 'build_emplacement') game.build_emplacement(args.slot);
+      else if (action === 'construct') game.construct(args.kind);
       else if (action === 'cancel_training') game.cancel_training(args.building, args.index);
       else if (action === 'eject_garrisoned') game.eject_garrisoned(args.id);
       else if (action === 'set_mode') game.set_mode(args.mode);

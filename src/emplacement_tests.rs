@@ -52,7 +52,7 @@ fn purchase_requires_money_command_and_live_match_and_demo_ignores_player_orders
         .retain(|b| b.team != Team::Player || b.kind != BuildingKind::Command);
     game.build_emplacement(0);
     assert_eq!(game.credits, EMPLACEMENT_COST);
-    assert!(!game.alive_building(Team::Player, BuildingKind::Emplacement));
+    assert!(!game.standing(Team::Player, BuildingKind::Emplacement));
 }
 
 #[test]
@@ -168,7 +168,7 @@ fn ai_keeps_reinforcing_when_its_mobile_armor_already_matches_the_threat() {
         }
     }
     game.prepare_emplacement(Team::Enemy);
-    assert!(!game.alive_building(Team::Enemy, BuildingKind::Emplacement));
+    assert!(!game.standing(Team::Enemy, BuildingKind::Emplacement));
     assert_eq!(game.ai_credits, STARTING_CREDITS);
 }
 
@@ -187,7 +187,7 @@ fn ai_buys_for_visible_armor_only_with_credits_and_never_holds_back_orders() {
         }
         // Hidden garrisons are not a visible threat.
         game.prepare_emplacement(team);
-        assert!(!game.alive_building(team, BuildingKind::Emplacement));
+        assert!(!game.standing(team, BuildingKind::Emplacement));
         for unit in &mut game.units {
             unit.state = UnitState::Attack;
         }
@@ -198,7 +198,7 @@ fn ai_buys_for_visible_armor_only_with_credits_and_never_holds_back_orders() {
             game.ai_credits = 100.0;
         }
         game.prepare_emplacement(team);
-        assert!(!game.alive_building(team, BuildingKind::Emplacement));
+        assert!(!game.standing(team, BuildingKind::Emplacement));
         assert_eq!(
             if team == Team::Player {
                 game.credits
@@ -214,7 +214,7 @@ fn ai_buys_for_visible_armor_only_with_credits_and_never_holds_back_orders() {
             game.ai_credits = 200.0;
         }
         game.prepare_emplacement(team);
-        assert!(game.alive_building(team, BuildingKind::Emplacement));
+        assert!(game.standing(team, BuildingKind::Emplacement));
         game.buildings
             .retain(|b| b.kind != BuildingKind::Emplacement);
         // Pads overrun by enemies are never bought into.
@@ -223,7 +223,7 @@ fn ai_buys_for_visible_armor_only_with_credits_and_never_holds_back_orders() {
             unit.z = if team == Team::Player { 30.0 } else { -30.0 };
         }
         game.prepare_emplacement(team);
-        assert!(!game.alive_building(team, BuildingKind::Emplacement));
+        assert!(!game.standing(team, BuildingKind::Emplacement));
     }
 }
 

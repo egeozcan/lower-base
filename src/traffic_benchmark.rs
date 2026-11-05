@@ -111,7 +111,12 @@ fn collector_goal(game: &Game, unit: &Unit) -> Option<(f32, f32, f32)> {
         return game
             .buildings
             .iter()
-            .filter(|b| b.team == unit.team && b.kind == BuildingKind::Refinery && b.hp > 0.0)
+            .filter(|b| {
+                b.team == unit.team
+                    && b.kind == BuildingKind::Refinery
+                    && b.hp > 0.0
+                    && b.construction_remaining <= 0.0
+            })
             .min_by(|a, b| {
                 distance_sq(unit.x, unit.z, a.x, a.z)
                     .total_cmp(&distance_sq(unit.x, unit.z, b.x, b.z))
@@ -221,7 +226,9 @@ mod tests {
     fn crowded_collectors_keep_their_delivery_rate() {
         // Preserve the driving/mining budgets while accounting for the new
         // stationary dump on every trip: each old cycle takes two seconds more.
-        for (per_team, average, fewest) in [(2, 13.5, 12), (4, 11.0, 9), (6, 9.2, 7)] {
+        // Two per side allows one delivery fewer since ore is mirrored rather
+        // than rotated between bases; over all eight layouts the rate is unchanged.
+        for (per_team, average, fewest) in [(2, 13.4, 12), (4, 11.0, 9), (6, 9.2, 7)] {
             let average = 180.0 / (180.0 / average + UNLOAD_DURATION);
             let fewest = (180.0 / (180.0 / fewest as f32 + UNLOAD_DURATION)).floor() as usize;
             let results: Vec<_> = [0, 26, 73]

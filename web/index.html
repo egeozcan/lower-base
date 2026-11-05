@@ -32,6 +32,14 @@
       </div>
     </div>
     <div class="menu-panel">
+      <fieldset class="difficulty-picker mode-picker" aria-describedby="mode-description">
+        <legend>MODE</legend>
+        <div class="difficulty-options mode-options">
+          <label><input type="radio" name="game-mode" value="deathmatch" checked><span>DEATHMATCH</span></label>
+          <label><input type="radio" name="game-mode" value="standard"><span>STANDARD</span></label>
+        </div>
+        <p id="mode-description" aria-live="polite">Full bases from the start and a large income. Build armies and guns.</p>
+      </fieldset>
       <fieldset class="difficulty-picker" aria-describedby="difficulty-description difficulty-fairness">
         <legend>ENEMY</legend>
         <div class="difficulty-options">
@@ -108,6 +116,21 @@
 
     <div id="production" class="build-grid" role="group" aria-label="Build">
       <div class="cameo-blank inset" aria-hidden="true"></div>
+      <button id="construct-refinery" class="cameo structure-cameo" type="button" title="Construct refinery (G): 600 credits, 20 seconds. Comes with one ore collector; required to train more.">
+        <span class="cameo-icon cameo-art-structure cameo-art-refinery" aria-hidden="true"></span>
+        <span class="cameo-progress" aria-hidden="true"></span>
+        <span class="cameo-key" aria-hidden="true">G</span><span class="cameo-name">REFINERY</span><small class="cameo-cost">600</small>
+      </button>
+      <button id="construct-barracks" class="cameo structure-cameo" type="button" title="Construct barracks (B): 400 credits, 15 seconds. Trains rifle infantry and rocket troopers.">
+        <span class="cameo-icon cameo-art-structure cameo-art-barracks" aria-hidden="true"></span>
+        <span class="cameo-progress" aria-hidden="true"></span>
+        <span class="cameo-key" aria-hidden="true">B</span><span class="cameo-name">BARRACKS</span><small class="cameo-cost">400</small>
+      </button>
+      <button id="construct-factory" class="cameo structure-cameo" type="button" title="Construct factory (F): 800 credits, 25 seconds. Builds tanks, demolition trucks and ore collectors.">
+        <span class="cameo-icon cameo-art-structure cameo-art-factory" aria-hidden="true"></span>
+        <span class="cameo-progress" aria-hidden="true"></span>
+        <span class="cameo-key" aria-hidden="true">F</span><span class="cameo-name">FACTORY</span><small class="cameo-cost">800</small>
+      </button>
       <button id="defense-0" class="cameo" type="button" title="Build left anti-tank gun (8): 200 credits, 8 seconds. Strong against tanks; vulnerable to rifles.">
         <span class="cameo-icon cameo-art-emplacement" aria-hidden="true"></span>
         <span class="cameo-progress" aria-hidden="true"></span>

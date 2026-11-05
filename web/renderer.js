@@ -213,6 +213,20 @@ function addEnvironment(scene, compact) {
     }
   }
 }
+const FOOTPRINTS = {command: [9.4, 8.6], refinery: [9.2, 7.6], factory: [8.4, 8], barracks: [7.6, 7.2], emplacement: [4.6, 4.6]};
+// An empty Standard site: corner brackets around the structure's footprint.
+function siteMarker(site) {
+  const marker = new THREE.Group();
+  const [w, d] = FOOTPRINTS[site.kind], line = mat(site.team === 'player' ? 0x9bc5ff : 0xffa18b), arm = 1.6, t = .14;
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+    box(marker, arm, .05, t, sx * (w / 2 - arm / 2), .06, sz * d / 2, line);
+    box(marker, t, .05, arm, sx * w / 2, .06, sz * (d / 2 - arm / 2), line);
+  }
+  box(marker, 1.2, .05, .12, 0, .06, 0, mat(0xe3c66b));
+  box(marker, .12, .05, 1.2, 0, .06, 0, mat(0xe3c66b));
+  marker.position.set(site.x, .04, site.z);
+  return marker;
+}
 function buildingMesh(b) {
   const g = new THREE.Group();
   // Orient the entrance toward the battlefield for each side. Each facility
@@ -352,7 +366,7 @@ function buildingMesh(b) {
     const mesh = new THREE.Mesh(geometry, material);
     mesh.castShadow = true; mesh.receiveShadow = true; body.add(mesh);
   }
-  const footprint = {command: [9.4, 8.6], refinery: [9.2, 7.6], factory: [8.4, 8], emplacement: [4.6, 4.6]}[b.kind] || [7.6, 7.2];
+  const footprint = FOOTPRINTS[b.kind] || FOOTPRINTS.barracks;
   g.add(contactShadow(...footprint));
   const baseRing = ring(b.kind === 'command' ? 4.3 : 3.5, accent, .3); baseRing.userData.decoration = true; g.add(baseRing);
   return g;
@@ -665,6 +679,7 @@ export class BattlefieldRenderer {
     sun.shadow.mapSize.set(compact ? 1024 : 2048, compact ? 1024 : 2048); Object.assign(sun.shadow.camera, {left:-60,right:60,top:70,bottom:-70,near:1,far:160}); sun.shadow.bias = -0.0005; sun.shadow.normalBias = .03; this.scene.add(sun);
     addEnvironment(this.scene, compact);
     this.defensePads = new Map();
+    this.siteMarkers = new Map();
     this.entities = new Map(); this.oreFields = new Map(); this.combatEffects = new CombatEffects(this.scene, compact); this.lastShotId = 0; this.lastTime = 0; this.lastFrame = performance.now(); this.raycaster = new THREE.Raycaster(); this.pointer = new THREE.Vector2();
     const pointerStarts = new Map();
     this.renderer.domElement.addEventListener('pointerdown', event => {
@@ -730,6 +745,12 @@ export class BattlefieldRenderer {
     for (const entity of this.entities.values()) this.removeEntity(entity);
     this.entities.clear();
     this.productionQueues.reset();
+    // Sites depend on the game mode, so they are rebuilt for every match.
+    for (const marker of this.siteMarkers.values()) {
+      this.scene.remove(marker);
+      marker.traverse(object => object.geometry?.dispose());
+    }
+    this.siteMarkers.clear();
   }
   update(snapshot, selectedIds = []) {
     if (!snapshot) return;
@@ -753,6 +774,12 @@ export class BattlefieldRenderer {
         this.defensePads.set(key, marker);
         this.scene.add(marker);
       }
+    }
+    for (const site of snapshot.sites || []) {
+      const key = `${site.team}-${site.kind}`;
+      let marker = this.siteMarkers.get(key);
+      if (!marker) { marker = siteMarker(site); this.siteMarkers.set(key, marker); this.scene.add(marker); }
+      marker.visible = !snapshot.buildings.some(b => b.team === site.team && b.kind === site.kind && b.hp > 0);
     }
     this.productionQueues.update(snapshot, this.camera, this.container.clientWidth, this.container.clientHeight);
     const oreIds = new Set(snapshot.ore.filter(o => o.amount > 0).map(o => o.id));
@@ -793,10 +820,12 @@ export class BattlefieldRenderer {
       entity.group.position.set(item.x, 0, item.z);
       entity.group.visible = item.state !== 'garrison';
       entity.cargo?.update(item, snapshot.buildings, dt, this.combatEffects.reducedMotion.matches);
+      if (!isUnit && item.construction_time > 0) {
+        // Structures rise from their foundations while under construction.
+        entity.group.children[0].scale.y = .25 + .75 * (1 - item.construction_remaining / item.construction_time);
+      }
       if (item.kind === 'emplacement') {
-        const model = entity.group.children[0];
-        model.rotation.y = item.facing;
-        model.scale.y = .25 + .75 * (1 - item.construction_remaining / 8);
+        entity.group.children[0].rotation.y = item.facing;
         entity.hp.position.y = 3;
       }
       entity.selectable = isUnit && item.team === 'player' && item.state === 'gather';

@@ -34,6 +34,21 @@ const difficultyDescriptions = {
   medium: 'Adaptive counters and regular attack waves.',
   hard: 'Adapts its strategy, builds counters, and varies its attacks each match.',
 };
+const modeDescriptions = {
+  deathmatch: 'Full bases from the start and a large income. Build armies and guns.',
+  standard: 'Start with a command center and little income. Construct your refinery, barracks and factory.',
+};
+for (const input of document.querySelectorAll('input[name="game-mode"]')) {
+  input.addEventListener('change', () => {
+    $('mode-description').textContent = modeDescriptions[input.value];
+  });
+}
+// Site structures in build order, with their hotkeys.
+const structures = [
+  { kind: 'refinery', key: 'g', cost: 600 },
+  { kind: 'barracks', key: 'b', cost: 400 },
+  { kind: 'factory', key: 'f', cost: 800 },
+];
 for (const input of document.querySelectorAll('input[name="difficulty"]')) {
   input.addEventListener('change', () => {
     $('difficulty-description').textContent = difficultyDescriptions[input.value];
@@ -47,16 +62,24 @@ function buildEmplacement(slot) {
   game.build_emplacement(slot);
   refresh();
 }
+function construct(kind) {
+  if (!canCommand() || snapshot.game_mode !== 'standard') return;
+  debugRecorder?.command('construct', { kind }, snapshot.time);
+  game.construct(kind);
+  refresh();
+}
+const finished = building => building.hp > 0 && building.construction_remaining <= 0;
 function beginMatch(isDemo = false) {
   demo = isDemo;
   game?.free();
   const seed = crypto.getRandomValues(new Uint32Array(1))[0];
   const difficulty = document.querySelector('input[name="difficulty"]:checked').value;
-  game = GameBridge.with_difficulty(seed, difficulty, demo);
+  const gameMode = document.querySelector('input[name="game-mode"]:checked').value;
+  game = GameBridge.with_options(seed, difficulty, gameMode, demo);
   debugReport = null;
   debugActions?.reset();
   debugRecorder = debugEnabled ? new MatchDebugRecorder({
-    seed, difficulty, demo, build: BUILD_INFO,
+    seed, difficulty, game_mode: gameMode, demo, build: BUILD_INFO,
     started_at: new Date().toISOString(),
     browser: navigator.userAgent,
     viewport: { width: innerWidth, height: innerHeight, pixel_ratio: devicePixelRatio },
@@ -70,10 +93,11 @@ function beginMatch(isDemo = false) {
   $('main-menu').hidden = true;
   $('app').hidden = false;
   $('app').classList.toggle('demo-mode', demo);
+  $('app').classList.toggle('standard-mode', gameMode === 'standard');
   $('pause-screen').hidden = true;
   $('game-over').classList.add('hidden');
   $('spectator-note').hidden = !demo;
-  $('match-label').textContent = `${difficulty.toUpperCase()} · ${demo ? 'AI VS AI' : 'YOUR COMMAND'}`;
+  $('match-label').textContent = `${gameMode.toUpperCase()} · ${difficulty.toUpperCase()} · ${demo ? 'AI VS AI' : 'YOUR COMMAND'}`;
   $('restart').textContent = demo ? 'WATCH AGAIN' : 'PLAY AGAIN';
   setHudInert(false);
   try {
@@ -168,7 +192,7 @@ function onSelect(id, additive, touch) {
 function setText(element, text) { if (element.textContent !== text) element.textContent = text; }
 
 // EVA-style status line: derived from snapshots only, it never affects the match.
-const onlineGuns = new Set();
+const onlineGuns = new Set(), onlineStructures = new Set();
 let lastUnitCount = null, statusTimer = 0;
 function announce(message) {
   const status = $('hud-status');
@@ -179,6 +203,7 @@ function announce(message) {
 }
 function resetHud() {
   onlineGuns.clear();
+  onlineStructures.clear();
   lastUnitCount = null;
   clearTimeout(statusTimer);
   $('hud-status').hidden = true;
@@ -258,17 +283,18 @@ function refresh() {
   }
   $('selected-count').textContent = String(selected.size);
   $('send-selected').disabled = !selected.size || !canCommand() || snapshot.mode === 'retreat';
-  const refinery = snapshot.buildings.some(b => b.team === 'player' && b.kind === 'refinery');
+  const refinery = snapshot.buildings.some(b => b.team === 'player' && b.kind === 'refinery' && finished(b));
+  const refineryBuilding = snapshot.buildings.some(b => b.team === 'player' && b.kind === 'refinery' && !finished(b));
   const collectors = snapshot.units.filter(u => u.team === 'player' && u.kind === 'collector').length;
   const sheltered = snapshot.units.filter(u => u.team === 'player' && u.state === 'garrison').length;
-  $('economy-status').textContent = `${collectors} COLLECTOR${collectors === 1 ? '' : 'S'} · REFINERY ${refinery ? 'ONLINE' : 'LOST'}${sheltered ? ` · ${sheltered} INSIDE` : ''}`;
+  $('economy-status').textContent = `${collectors} COLLECTOR${collectors === 1 ? '' : 'S'} · REFINERY ${refinery ? 'ONLINE' : refineryBuilding ? 'BUILDING' : snapshot.game_mode === 'standard' ? 'NONE' : 'LOST'}${sheltered ? ` · ${sheltered} INSIDE` : ''}`;
   const demolitionQueued = snapshot.factory_queue.includes('demolition');
   const demolitionAlive = snapshot.units.some(u => u.team === 'player' && u.kind === 'demolition');
   setText($('demolition-status'), demolitionAlive ? 'ACTIVE' : demolitionQueued ? 'QUEUED' : '1×');
   for (const s of specs) {
     const building = ['tank', 'collector', 'demolition'].includes(s.kind) ? 'factory' : 'barracks';
     const queue = building === 'factory' ? snapshot.factory_queue : snapshot.barracks_queue;
-    const producer = snapshot.buildings.find(b => b.team === 'player' && b.kind === building && b.hp > 0);
+    const producer = snapshot.buildings.find(b => b.team === 'player' && b.kind === building && finished(b));
     const occupants = snapshot.units.filter(u => u.team === 'player' && u.hp > 0 && u.state === 'garrison' && u.garrison === producer?.id).length;
     const cameo = $(`train-${s.kind}`);
     cameo.disabled = !canCommand() || snapshot.credits < s.cost || queue.length + occupants >= 9 || (s.kind === 'demolition' && (demolitionAlive || demolitionQueued)) || (s.kind === 'collector' && !refinery) || !producer;
@@ -289,6 +315,23 @@ function refresh() {
     $(`${prefix}-bar`).style.width = `${Math.max(0, Math.min(100, buildings.filter(b => b.kind !== 'emplacement').reduce((a,b) => a + b.hp / b.max_hp, 0) / 4 * 100))}%`;
   }
   const command = snapshot.buildings.some(b => b.team === 'player' && b.kind === 'command');
+  // The command center builds one site structure at a time; guns build on their own pads.
+  const constructing = snapshot.buildings.find(b => b.team === 'player' && b.kind !== 'emplacement' && b.hp > 0 && b.construction_remaining > 0);
+  for (const { kind, cost } of structures) {
+    const structure = snapshot.buildings.find(b => b.team === 'player' && b.kind === kind && b.hp > 0);
+    const button = $(`construct-${kind}`);
+    const online = !!structure && structure.construction_remaining <= 0;
+    const building = !!structure && !online;
+    button.disabled = !canCommand() || !!structure || !!constructing || !command || snapshot.credits < cost;
+    button.classList.toggle('online', online);
+    button.classList.toggle('is-building', building);
+    if (building) button.style.setProperty('--progress', Math.max(0, Math.min(1, 1 - structure.construction_remaining / structure.construction_time)));
+    setText(button.querySelector('.cameo-cost'), online ? 'ONLINE' : building ? `${Math.ceil(structure.construction_remaining)}s` : command ? String(cost) : 'LOST');
+    if (snapshot.game_mode === 'standard') {
+      if (online && !onlineStructures.has(kind) && !demo && snapshot.time > 0) announce('CONSTRUCTION COMPLETE');
+      if (online) onlineStructures.add(kind); else onlineStructures.delete(kind);
+    }
+  }
   for (const slot of [0, 1]) {
     const gun = snapshot.buildings.find(b => b.team === 'player' && b.defense_slot === slot);
     const button = $(`defense-${slot}`);
@@ -297,7 +340,7 @@ function refresh() {
     button.disabled = !canCommand() || !!gun || !command || snapshot.credits < 200;
     button.classList.toggle('online', online);
     button.classList.toggle('is-building', building);
-    if (building) button.style.setProperty('--progress', Math.max(0, Math.min(1, 1 - gun.construction_remaining / 8)));
+    if (building) button.style.setProperty('--progress', Math.max(0, Math.min(1, 1 - gun.construction_remaining / gun.construction_time)));
     setText(button.querySelector('.cameo-cost'), online ? 'ONLINE' : building ? `${Math.ceil(gun.construction_remaining)}s` : command ? '200' : 'LOST');
     if (online && !onlineGuns.has(slot) && !demo) announce('CONSTRUCTION COMPLETE');
     if (online) onlineGuns.add(slot); else onlineGuns.delete(slot);
@@ -346,6 +389,7 @@ $('attack').addEventListener('click', () => setMode('attack'));
 $('retreat').addEventListener('click', () => setMode('retreat'));
 $('send-selected').addEventListener('click', sendSelected);
 for (const slot of [0, 1]) $(`defense-${slot}`).addEventListener('click', () => buildEmplacement(slot));
+for (const { kind } of structures) $(`construct-${kind}`).addEventListener('click', () => construct(kind));
 function setView(view) {
   if (!renderer || !game || paused) return;
   renderer.setView(view);
@@ -388,6 +432,8 @@ window.addEventListener('keydown', event => {
   if (spec) train(spec.kind);
   if (event.key === '8') buildEmplacement(0);
   if (event.key === '9') buildEmplacement(1);
+  const structure = structures.find(s => s.key === event.key.toLowerCase());
+  if (structure) construct(structure.kind);
   if (event.key === 'Enter' && !(event.target instanceof HTMLButtonElement)) sendSelected();
   if (event.key === 'Escape') { selected.clear(); refresh(); }
 });

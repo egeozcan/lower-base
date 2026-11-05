@@ -22,7 +22,7 @@ Open <http://localhost:8000>. Serve the files over HTTP rather than opening `ind
 
 ## How to play
 
-The main menu offers **Easy**, **Medium** (default), and **Hard** AI difficulty, followed by **Start Game**, **Demo**, and **Help**. Start Game puts you in command of the southern blue army. Demo lets you spectate two computer commanders at the selected difficulty; troop commands are disabled. Help opens the field manual with objectives, unit guidance, and controls.
+The main menu offers two game modes, **Deathmatch** (default) and **Standard**, then **Easy**, **Medium** (default), and **Hard** AI difficulty, followed by **Start Game**, **Demo**, and **Help**. Start Game puts you in command of the southern blue army. Demo lets you spectate two computer commanders at the selected difficulty; troop commands are disabled. Help opens the field manual with objectives, unit guidance, and controls.
 
 - **Easy** reacts slowly, uses a predictable army mix, and sends small patrols with long gaps. A forgiving opponent for learning the game.
 - **Medium** uses the original adaptive production, regular attack waves, and defensive regrouping strategy.
@@ -33,7 +33,17 @@ beat rifles**. Rocket hits deal 78 damage to tanks; tank shells deal 18 damage t
 rocket troopers and 34 to rifles. Damage to buildings is unchanged. Keep the units
 that counter the enemy force protected by a mixed army.
 
-All difficulties play fairly: both sides start with 500 credits, earn 24 passive credits per second, and have a 2,000-credit cap. Unit costs, build times, movement, combat, mining, and queue limits are identical. The whole battlefield is visible to both sides; AI decisions cannot inspect opposing production queues or sheltered units. Difficulty changes the commander's decisions, never its resources or unit stats. The selected difficulty applies to demos and rematches too.
+### Game modes
+
+- **Deathmatch** starts each side with its whole base (command center, barracks, factory, refinery), three rifles and a tank, and 500 credits. Each side earns 24 passive credits per second. Guns are the only structures you can construct.
+- **Standard** starts each side with only its command center, no units, and 1,500 credits. Each side earns 5 passive credits per second. The command center constructs the **Refinery** (600 credits, 20 s), **Barracks** (400, 15 s), and **Factory** (800, 25 s) on fixed, marked sites in the usual base layout. Use the build buttons or `G` / `B` / `F`.
+  - It builds one structure at a time, paid up front, with no queue and no cancel. Guns still build independently on their pads.
+  - Structures appear at full health and can be attacked while under construction, but produce nothing and accept no ore until finished.
+  - Every finished refinery, including a rebuilt one, comes with one ore collector that starts mining immediately. More collectors come from the factory while a refinery stands (in both modes).
+  - Destroyed structures can be rebuilt for full cost while the command center stands. Without it, surviving buildings keep producing, but nothing new can be constructed. Empty sites do not count toward victory.
+  - Every difficulty builds refinery, barracks, then factory, rebuilds losses in the same order, and holds back the next structure's price from other spending. Otherwise it plays as in Deathmatch.
+
+All difficulties play fairly: both sides start with the same credits and passive income for the chosen mode, and have a 2,000-credit cap. Unit costs, build times, movement, combat, mining, and queue limits are identical. The whole battlefield is visible to both sides; AI decisions cannot inspect opposing production queues or sheltered units. Difficulty changes the commander's decisions, never its resources or unit stats. The selected difficulty applies to demos and rematches too.
 
 During either a game or demo, **Pause** (or `P`) freezes the battlefield, production, and income. Choose **Resume**, press `P`, or press `Esc` to continue. **Abort** returns to the main menu; your next match starts fresh. Finished demos announce the winning color and offer **Watch Again** or **Main Menu**.
 
@@ -45,7 +55,7 @@ During either a game or demo, **Pause** (or `P`) freezes the battlefield, produc
   - **Send** it to strike anywhere. It drives at the target where a blast would destroy the most credits, allowing for the fire it would take on the way in, and goes off once it has all it can get there, such as when the target's escorts block its way. It passes lone units for groups, finishes damaged buildings rather than chipping healthy ones, and destroys anti-tank guns outright. It never sets itself off where it would destroy more of your own side than of the enemy's, but a truck destroyed by enemy fire explodes where it is.
   - Rifles fire too late to stop a charging truck. Rocket hits deal 30 damage to it, so it takes the first volley of five rockets, or of rockets and tanks together, to destroy it before it closes. Tanks survive near the outer edge of the blast.
   - Medium occasionally fields one against large infantry armies. Hard fields one as soon as it sees a massed rifle army with no tanks and few rockets. Both send trucks on their own, never with an attack wave, and build extra rockets against yours.
-- Both sides start with a refinery. Ore fields are randomly generated each match with equal amounts and positions rotated 180 degrees between the bases. Build an **Ore Collector** for 200 credits; it automatically mines ore and delivers up to 100 credits per trip to your refinery. Ore depletes as it is mined, and collectors move on to the next field.
+- In Deathmatch, both sides start with a refinery. Ore fields are randomly generated each match with equal amounts and positions mirrored between the bases, so both sides face exactly the same map. Build an **Ore Collector** for 200 credits; it automatically mines ore and delivers up to 100 credits per trip to your refinery. Ore depletes as it is mined, and collectors move on to the next field.
 - Ore visibly builds up in each collector's rear hopper as it mines. At the refinery, collectors stop for two seconds to turn, tip the hopper, and pour the load into the intake before driving off. Credits arrive when unloading finishes.
 - Collectors are unarmed and mine independently once deployed. Each works one ore field until it runs out, chosen by driving distance to the refinery. Collectors spread across both flanks of the base so they do not meet head-on in the narrow gaps beside the factory and barracks. A collector whose field runs out mid-load fills up at another field when that is worth the detour. Collectors completed during Retreat wait inside the factory until Gather or Attack releases them. Protect them and your refinery to keep ore income flowing. The opposing commander also builds collectors.
 - Click a gathered unit to select it; Shift-click to add or remove units. On touchscreens, tap units to toggle their selection. Tap empty ground to clear it. Use **Send** to commit the selected units.
@@ -56,7 +66,7 @@ During either a game or demo, **Pause** (or `P`) freezes the battlefield, produc
 - **Retreat** recalls deployed troops to the base rally area and keeps all newly completed units inside their barracks or factory. Recalled troops defend locally once they reach the rally area; active collectors keep mining. Choose **Gather** to release sheltered troops to the rally area, or **Attack** to release them into battle. Sheltered collectors resume mining in either mode. Units inside a building are lost if it is destroyed.
 - Eliminate all enemy units and buildings to win. You lose when all your units and buildings are destroyed.
 
-The opposing commander adjusts its production to your army, retreats when an incoming force overwhelms its local defenders, and releases reserves once it has regrouped or the threat passes. There is no building placement in this version.
+The opposing commander adjusts its production to your army, retreats when an incoming force overwhelms its local defenders, and releases reserves once it has regrouped or the threat passes. Structures are constructed only on their fixed sites; there is no free building placement.
 
 ## Development
 
@@ -196,7 +206,7 @@ preserved too, so future scoring changes cannot silently strengthen the baseline
 Neither the frozen opponent nor the harness is included in normal WebAssembly builds.
 
 ```sh
-# 12 seeds, both starting sides, standard starts (24 games).
+# 12 seeds, both starting sides, the default scenario (24 Deathmatch games).
 cargo run --release --features ai-bench --bin ai-bench
 
 # seed count, first seed, game time limit in seconds, scenario set.
@@ -219,6 +229,13 @@ cargo run --release --features ai-bench --bin ai-bench -- --trucks
 
 # Gun-backed defender duels against equal mirror armies, commanders disabled.
 cargo run --release --features ai-bench --bin ai-bench -- --defense
+
+# Mirror demos at each difficulty in either game mode: outcome (mirrors
+# should not favor a side), plus base completion time and rebuilds in
+# Standard (seed count, first seed, time limit). Every other benchmark runs
+# Deathmatch, so earlier reports stay comparable.
+cargo run --release --features ai-bench --bin ai-bench -- --game-mode standard 8 0 600
+cargo run --release --features ai-bench --bin ai-bench -- --game-mode deathmatch 8 0 600
 
 # Optional per-side army, economy, queue and strategy traces go to stderr.
 AI_BENCH_TRACE=1 cargo run --release --features ai-bench --bin ai-bench -- 1 26 180 all
