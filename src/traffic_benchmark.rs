@@ -219,9 +219,11 @@ mod tests {
 
     #[test]
     fn crowded_collectors_keep_their_delivery_rate() {
-        // Two collectors share no lane, so they keep nearly a lone collector's
-        // rate of about 14.
+        // Preserve the driving/mining budgets while accounting for the new
+        // stationary dump on every trip: each old cycle takes two seconds more.
         for (per_team, average, fewest) in [(2, 13.5, 12), (4, 11.0, 9), (6, 9.2, 7)] {
+            let average = 180.0 / (180.0 / average + UNLOAD_DURATION);
+            let fewest = (180.0 / (180.0 / fewest as f32 + UNLOAD_DURATION)).floor() as usize;
             let results: Vec<_> = [0, 26, 73]
                 .into_iter()
                 .map(|seed| mining(seed, per_team, 180.0))

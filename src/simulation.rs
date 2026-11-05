@@ -248,6 +248,8 @@ pub struct Unit {
     pub state: UnitState,
     pub cargo: f32,
     pub returning: bool,
+    // Zero while driving/mining; advances to one while parked for delivery.
+    pub unload_progress: f32,
     pub garrison: Option<u32>,
     #[serde(skip)]
     cooldown: f32,
@@ -649,6 +651,7 @@ impl Game {
             state,
             cargo: 0.0,
             returning: false,
+            unload_progress: 0.0,
             garrison,
             cooldown: 0.2,
             detonated: false,
@@ -1193,6 +1196,7 @@ impl Game {
                         .total_cmp(&distance_sq(unit.x, unit.z, b.x, b.z))
                 });
             let Some(refinery) = refinery else {
+                unit.unload_progress = 0.0;
                 continue;
             };
             let mut deposit = unit
@@ -1216,6 +1220,7 @@ impl Game {
             };
             let distance = distance_sq(unit.x, unit.z, x, z).sqrt();
             if distance > stopping_distance + 0.01 {
+                unit.unload_progress = 0.0;
                 // Loaded collectors have right of way, so empty ones leaving
                 // the refinery make room for deliveries in narrow gaps.
                 let right_of_way = if unit.returning {
@@ -1233,6 +1238,12 @@ impl Game {
                     right_of_way,
                 );
             } else if unit.returning {
+                // Keep the load and hold position while the hopper tips, pours,
+                // and lowers. Credit it once the visible delivery is finished.
+                unit.unload_progress = (unit.unload_progress + dt / UNLOAD_DURATION).min(1.0);
+                if unit.unload_progress < 1.0 {
+                    continue;
+                }
                 if unit.team == Team::Player {
                     self.credits = (self.credits + unit.cargo).min(CREDIT_CAP);
                 } else {
@@ -1240,6 +1251,7 @@ impl Game {
                 }
                 unit.cargo = 0.0;
                 unit.returning = false;
+                unit.unload_progress = 0.0;
                 // Collectors rebalance between deposits after each delivery.
                 let next = choose_deposit(
                     &self.ore,
@@ -1683,6 +1695,7 @@ fn deploy_garrisoned_unit(unit: &mut Unit, buildings: &[Building], mode: Mode) -
 }
 
 const UNLOAD_REACH: f32 = 5.4;
+const UNLOAD_DURATION: f32 = 2.0;
 const MINING_REACH: f32 = 3.0;
 // Deposit choice is weighed in driving distance per load. Collectors working
 // the same deposit crowd its mining spots, and collectors on the same flank
@@ -2862,7 +2875,7 @@ mod tests {
                 }
             }
             assert!(
-                delivered.is_some_and(|step| step < 120),
+                delivered.is_some_and(|step| step < 120 + (UNLOAD_DURATION / 0.05) as usize),
                 "{team:?}: loaded collector delivered at {delivered:?}"
             );
             assert!(
@@ -2889,10 +2902,12 @@ mod tests {
                     }
                 }
             }
-            // Alone, the leader needs about 110 steps. Followers keep pace
-            // a few lengths behind instead of detouring around it.
+            // Alone, the leader needs about 110 driving steps plus its dump.
+            // Followers keep pace a few lengths behind it.
             assert!(
-                delivered.iter().all(|d| d.is_some_and(|step| step < 190)),
+                delivered
+                    .iter()
+                    .all(|d| d.is_some_and(|step| step < 190 + (UNLOAD_DURATION / 0.05) as usize)),
                 "{team:?}: deliveries at steps {delivered:?}"
             );
         }
@@ -3145,6 +3160,56 @@ mod tests {
         g.train("collector");
         assert!(g.factory_queue.is_empty());
     }
+    #[test]
+    fn collectors_stop_at_the_refinery_for_a_visible_dump() {
+        for team in [Team::Player, Team::Enemy] {
+            for load in [12.0, COLLECTOR_CAPACITY] {
+                let mut g = collectors_at(team, &[(5.4, 50.0, load)]);
+                g.units[0].returning = true;
+                g.credits = 0.0;
+                g.ai_credits = 0.0;
+                let parked = (g.units[0].x, g.units[0].z);
+                for _ in 0..10 {
+                    g.harvest_and_unload(0.05);
+                    assert_eq!(
+                        g.units[0].cargo, load,
+                        "load disappeared without a dump phase"
+                    );
+                    assert_eq!((g.units[0].x, g.units[0].z), parked);
+                    assert!(g.units[0].unload_progress > 0.0);
+                    assert_eq!(g.credits + g.ai_credits, 0.0);
+                }
+                for _ in 0..50 {
+                    g.harvest_and_unload(0.05);
+                    if g.units[0].cargo == 0.0 {
+                        break;
+                    }
+                }
+                assert_eq!(g.units[0].cargo, 0.0);
+                assert_eq!(g.units[0].unload_progress, 0.0);
+                assert_eq!(g.credits + g.ai_credits, load);
+            }
+        }
+    }
+
+    #[test]
+    fn destroying_a_refinery_mid_dump_preserves_the_uncredited_load() {
+        let mut g = collectors_at(Team::Player, &[(5.4, 50.0, COLLECTOR_CAPACITY)]);
+        g.credits = 0.0;
+        for _ in 0..20 {
+            g.harvest_and_unload(0.05);
+        }
+        assert!(g.units[0].unload_progress > 0.0);
+        g.buildings
+            .retain(|b| b.team != Team::Player || b.kind != BuildingKind::Refinery);
+        for _ in 0..60 {
+            g.harvest_and_unload(0.05);
+        }
+        assert_eq!(g.units[0].unload_progress, 0.0);
+        assert_eq!(g.units[0].cargo, COLLECTOR_CAPACITY);
+        assert_eq!(g.credits, 0.0);
+    }
+
     #[test]
     fn collectors_mine_and_deliver_without_creating_ore() {
         let mut g = Game::new();

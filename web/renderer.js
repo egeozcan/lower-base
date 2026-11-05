@@ -1,6 +1,7 @@
 import * as THREE from './three.module.js';
 import { CombatEffects } from './combat-effects.js';
 import { ProductionQueues } from './production-queues.js';
+import { CollectorCargo } from './collector-cargo.js';
 
 // The battlefield is deliberately made from simple, lit geometry so it remains
 // readable when dozens of units are moving at once.
@@ -367,13 +368,14 @@ function unitMesh(u) {
   // Combine the small armor pieces by material. Detailed models stay cheap to
   // draw even when both armies have many units on screen.
   // Parts go to the hull unless a turret is being assembled around its pivot.
-  const hull = new Map(), turret = new Map(), pivotZ = -.1;
+  const hull = new Map(), turret = new Map(), hopper = new Map(), pivotZ = -.1;
   let parts = hull;
   const addPart = (geometry, material, x, y, z, rx = 0, ry = 0, rz = 0) => {
     const source = geometry.index ? geometry.toNonIndexed() : geometry;
     if (source !== geometry) geometry.dispose();
     source.applyMatrix4(new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(rx, ry, rz)));
-    source.translate(x, y, parts === turret ? z - pivotZ : z);
+    source.translate(x, parts === hopper ? y - 1.36 : y,
+      parts === turret ? z - pivotZ : parts === hopper ? z - 1.88 : z);
     if (!parts.has(material)) parts.set(material, []);
     parts.get(material).push(source);
   };
@@ -412,6 +414,7 @@ function unitMesh(u) {
     drum(.09, .11, .9, .78, 2.1, -.95, shadow);
     drum(.12, .12, .08, .78, 2.56, -.95, rust);
     // Hopper: flared walls with a faction stripe along the rim.
+    parts = hopper;
     plate(1.7, .1, 2.2, 0, 1.36, .75, shadow);
     for (const x of [-1, 1]) {
       plate(.12, .95, 2.3, x * .93, 1.8, .75, hullMat, 0, 0, x * .16);
@@ -421,6 +424,7 @@ function unitMesh(u) {
     plate(2, .95, .12, 0, 1.8, 1.88, hullMat);
     plate(2.1, .16, .14, 0, 2.26, 1.9, glow);
     plate(2, .95, .12, 0, 1.8, -.38, hullMat);
+    parts = hull;
     for (const x of [-.6, .6]) plate(.36, .14, .5, x, 1.4, 1.98, stripe);
     for (const x of [-.85, -.3]) plate(.18, .14, .08, x, 1.45, -1.75, lamp);
   } else if (u.kind === 'demolition') {
@@ -550,6 +554,10 @@ function unitMesh(u) {
     }
   };
   merge(hull, g);
+  if (hopper.size) {
+    const pivot = new THREE.Group(); pivot.position.set(0, 1.36, 1.88);
+    merge(hopper, pivot); g.add(pivot); g.userData.hopper = pivot;
+  }
   if (turret.size) {
     const pivot = new THREE.Group(); pivot.position.z = pivotZ;
     merge(turret, pivot); g.add(pivot); g.userData.turret = pivot;
@@ -578,7 +586,7 @@ function animateUnit(entity, item, dt, now, effects, compact) {
   if (continuous && step > .002) entity.heading = Math.atan2(-dx, -dz);
   const aiming = now < entity.aimUntil;
   const desired = aiming && !turret ? entity.aimYaw : entity.heading;
-  if (desired !== undefined) model.rotation.y = turnToward(model.rotation.y, desired, (TURN_RATE[item.kind] || 9) * dt);
+  if (desired !== undefined && !(item.unload_progress > 0)) model.rotation.y = turnToward(model.rotation.y, desired, (TURN_RATE[item.kind] || 9) * dt);
   if (turret) {
     turret.rotation.y = turnToward(turret.rotation.y, aiming ? wrapAngle(entity.aimYaw - model.rotation.y) : 0, 4.5 * dt);
     const recoil = Math.max(0, (entity.recoilUntil - now) / 240) * .35;
@@ -768,8 +776,7 @@ export class BattlefieldRenderer {
         group.add(isUnit ? unitMesh(item) : buildingMesh(item));
         let cargo = null;
         if (isUnit && item.kind === 'collector') {
-          cargo = new THREE.Mesh(new THREE.BoxGeometry(1.6, .7, 1.9), mat(0xe5b64a));
-          cargo.position.set(0, 1.78, .75); group.children[0].add(cargo);
+          cargo = new CollectorCargo(group, mat(0xe5b64a, 0x9a6512, .25), item.cargo);
         }
         // A generous transparent target keeps individual soldiers easy to click.
         let hitTarget = null;
@@ -782,13 +789,10 @@ export class BattlefieldRenderer {
         this.scene.add(group); entity = {group, selection, hp, hitTarget, cargo, kind: item.kind, isUnit, selectable: false, recoilUntil: 0, emission: 0,
           placed: false, speed: 0, gait: 0, dust: 0, heading: undefined, aimYaw: 0, aimUntil: 0}; this.entities.set(key, entity);
       }
-      if (entity.cargo) {
-        entity.cargo.visible = item.cargo > 0;
-        entity.cargo.scale.y = item.cargo / 100;
-      }
       if (isUnit) animateUnit(entity, item, dt, now, this.combatEffects, this.compact);
       entity.group.position.set(item.x, 0, item.z);
       entity.group.visible = item.state !== 'garrison';
+      entity.cargo?.update(item, snapshot.buildings, dt, this.combatEffects.reducedMotion.matches);
       if (item.kind === 'emplacement') {
         const model = entity.group.children[0];
         model.rotation.y = item.facing;
@@ -846,6 +850,7 @@ export class BattlefieldRenderer {
     this.renderer.render(this.scene, this.camera);
   }
   removeEntity(entity) {
+    entity.cargo?.dispose();
     this.scene.remove(entity.group);
     entity.group.traverse(object => {
       object.geometry?.dispose();

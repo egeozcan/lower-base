@@ -393,7 +393,9 @@ window.addEventListener('keydown', event => {
 });
 async function start() {
   try {
-    await init();
+    // The asynchronous WASM fetch can reuse an old cached build even after a
+    // page reload. Revalidate it so new renderer fields match the simulation.
+    await init({ module_or_path: fetch(new URL('./pkg/lower_base_bg.wasm', import.meta.url), { cache: 'no-cache' }) });
     createProduction();
     $('start-game').disabled = false;
     $('start-demo').disabled = false;
