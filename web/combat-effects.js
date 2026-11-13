@@ -1,4 +1,5 @@
 import * as THREE from './three.module.js';
+import { TerrainDamage } from './terrain-damage.js';
 
 // All flames, smoke and sparks share two instanced draws. Fixed budgets keep a
 // simultaneous army wipe from creating an unbounded number of GPU resources.
@@ -60,8 +61,9 @@ function particleBatch(scene, capacity, smoke) {
 }
 
 export class CombatEffects {
-  constructor(scene, compact) {
+  constructor(scene, compact, foliage) {
     this.scene = scene;
+    this.ground = new TerrainDamage(scene, compact, foliage);
     this.smoke = particleBatch(scene, compact ? 220 : 440, true);
     this.glow = particleBatch(scene, compact ? 280 : 560, false);
     this.transform = new THREE.Object3D();
@@ -139,7 +141,18 @@ export class CombatEffects {
       transparent: true, opacity: 1, depthWrite: false, toneMapped: false });
     const mesh = new THREE.Line(geometry, material); this.scene.add(mesh);
     if (this.projectiles.length >= 128) this.removeProjectile(this.projectiles.shift());
-    this.projectiles.push({ mesh, start, end, age: 0, trail: 0, kind: shot.kind,
+    // Explosive rounds scar the ground under a unit they hit. Against a
+    // building, only the occasional round that falls short does.
+    let scar = null;
+    if (heavy && shot.target_is_unit) {
+      scar = { x: end.x + random(-.6, .6), z: end.z + random(-.6, .6) };
+    } else if (heavy && Math.random() < .35) {
+      const short = random(4.5, 6.5);
+      scar = { x: end.x - direction.x * short + random(-1.5, 1.5), z: end.z - direction.z * short + random(-1.5, 1.5) };
+    }
+    // Guns fire the heaviest shell, then tanks, then rocket troopers.
+    if (scar) scar.radius = !shot.source_is_unit ? 1.7 : shot.kind === 'tank' ? 1.1 : .85;
+    this.projectiles.push({ mesh, start, end, age: 0, trail: 0, kind: shot.kind, scar,
       duration: heavy ? Math.max(.1, start.distanceTo(end) / (shot.kind === 'tank' ? 65 : 36)) : .085 });
   }
   explode(blast) {
@@ -162,6 +175,9 @@ export class CombatEffects {
         gravity: 16, color: 0xffe7a0 });
     }
     for (let i = 0; i < 8; i++) this.smokePuff({ ...origin, y: 2 + i * .6 }, random(3, 5));
+    this.ground.scorch(blast.x, blast.z, blast.radius * .9, .5);
+    this.ground.crater(blast.x, blast.z, 2.3);
+    this.ground.blast(blast.x, blast.z, blast.radius + 2.5);
     const mesh = new THREE.Mesh(new THREE.RingGeometry(.85, 1, 48),
       new THREE.MeshBasicMaterial({ color: 0xffbc50, transparent: true, opacity: .8,
         side: THREE.DoubleSide, depthWrite: false }));
@@ -194,11 +210,18 @@ export class CombatEffects {
     model.traverse(object => {
       if (object.isMesh) { object.material = material; object.castShadow = false; }
     });
-    const scorchMaterial = new THREE.MeshBasicMaterial({ color: 0x25211a,
-      transparent: true, opacity: .38, depthWrite: false, map: this.smoke.texture });
-    const scorch = new THREE.Mesh(new THREE.PlaneGeometry(scale * 6, scale * 6), scorchMaterial);
-    scorch.rotation.x = -Math.PI / 2; scorch.position.set(position.x, .07, position.z);
-    this.scene.add(wreck, scorch);
+    this.scene.add(wreck);
+    // The ground keeps the scar after the wreck is gone. A truck's own blast
+    // leaves a larger one.
+    if (entity.kind !== 'demolition') {
+      this.ground.scorch(position.x, position.z, heavy ? scale * 2.2 : 1, heavy ? .6 : .4);
+      if (vehicle) this.ground.crater(position.x, position.z, .95);
+      else if (heavy) {
+        for (let i = 0; i < 3; i++) {
+          this.ground.crater(position.x + random(-1, 1) * scale, position.z + random(-1, 1) * scale, random(.7, 1.2));
+        }
+      }
+    }
     const debris = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), material, heavy ? 12 : 3);
     debris.frustumCulled = false; this.scene.add(debris);
     const pieces = Array.from({ length: debris.count }, () => ({
@@ -206,7 +229,7 @@ export class CombatEffects {
       size: random(.12, .35) * scale, spin: random(-5, 5), angle: random(0, 6.28),
     }));
     if (this.remains.length >= 32) this.removeRemains(this.remains.shift());
-    this.remains.push({ wreck, model, material, scorch, debris, pieces, age: 0, emission: 0,
+    this.remains.push({ wreck, model, material, debris, pieces, age: 0, emission: 0,
       duration: heavy ? 10 : 3, heavy, vehicle, scale, position,
       rotation: model.rotation.clone() });
   }
@@ -215,9 +238,11 @@ export class CombatEffects {
     projectile.mesh.geometry.dispose(); projectile.mesh.material.dispose();
   }
   removeRemains(remains) {
-    this.scene.remove(remains.wreck, remains.debris, remains.scorch);
-    remains.scorch.geometry.dispose(); remains.scorch.material.dispose();
-    remains.wreck.traverse(object => object.geometry?.dispose());
+    this.scene.remove(remains.wreck, remains.debris);
+    remains.wreck.traverse(object => {
+      object.geometry?.dispose();
+      if (object.isInstancedMesh) object.dispose();
+    });
     remains.debris.dispose(); remains.debris.geometry.dispose(); remains.material.dispose();
   }
   update(dt, camera) {
@@ -248,6 +273,7 @@ export class CombatEffects {
       }
       if (t < 1) return true;
       this.burst(p.end, p.kind === 'soldier' ? .18 : .55, p.kind !== 'soldier');
+      if (p.scar) this.ground.scorch(p.scar.x, p.scar.z, p.scar.radius, .36);
       this.removeProjectile(p); return false;
     });
     this.remains = this.remains.filter(r => {
@@ -262,7 +288,6 @@ export class CombatEffects {
         r.model.position.y = collapse * .2;
       }
       r.material.opacity = clamp((r.duration - r.age) / 2);
-      r.scorch.material.opacity = r.material.opacity * .38;
       r.wreck.position.y = -Math.max(0, 1 - r.material.opacity) * .25;
       for (let i = 0; i < r.pieces.length; i++) {
         const p = r.pieces[i];
@@ -322,9 +347,11 @@ export class CombatEffects {
     for (const r of this.remains) this.removeRemains(r);
     this.projectiles = []; this.remains = []; this.shake = 0; this.demolitionShake = 0;
     for (const batch of [this.smoke, this.glow]) { batch.particles = []; batch.mesh.count = 0; }
+    this.ground.clear();
   }
   dispose() {
     this.clear();
+    this.ground.dispose();
     for (const batch of [this.smoke, this.glow]) {
       this.scene.remove(batch.mesh); batch.mesh.dispose(); batch.mesh.geometry.dispose();
       batch.mesh.material.dispose(); batch.texture.dispose();

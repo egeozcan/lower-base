@@ -59,3 +59,13 @@ _Avoid_: Ore depot
 **Collector**:
 An unarmed unit that mines ore and delivers it to its side's Refinery.
 _Avoid_: Harvester, miner
+
+## Combat
+
+**Damaged**:
+A unit or building at half its health or less. Its health bar is yellow, and a Damaged unit moves at three-quarters speed.
+_Avoid_: Hurt, yellow health
+
+**Critical**:
+A unit or building at a quarter of its health or less. Its health bar is red, and a Critical unit moves at half speed.
+_Avoid_: Heavily damaged, red health

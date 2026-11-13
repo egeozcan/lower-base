@@ -71,11 +71,10 @@ fn rocket_ready(unit: &Unit, units: &[Unit], launching: bool) -> bool {
                 && (u.state == UnitState::Attack || launching)
         })
         .map(|u| {
-            (distance_sq(u.x, u.z, target.x, target.z).sqrt() - u.kind.range()).max(0.0)
-                / u.kind.speed()
+            (distance_sq(u.x, u.z, target.x, target.z).sqrt() - u.kind.range()).max(0.0) / u.speed()
         })
         .min_by(f32::total_cmp);
-    screen_eta.is_none_or(|eta| (distance - unit.kind.range()) / unit.kind.speed() >= eta + 0.35)
+    screen_eta.is_none_or(|eta| (distance - unit.kind.range()) / unit.speed() >= eta + 0.35)
 }
 
 impl Game {
@@ -334,7 +333,7 @@ impl Game {
                         && distance_sq(anchor.x, anchor.z, u.x, u.z) <= DEMOLITION_RADIUS.powi(2)
                 })
                 .collect();
-            let speed = cluster.iter().map(|u| u.kind.speed()).fold(0.0, f32::max);
+            let speed = cluster.iter().map(|u| u.speed()).fold(0.0, f32::max);
             let after_build = anchor.z * direction - speed * ready_in;
             if after_build <= start_z {
                 continue;

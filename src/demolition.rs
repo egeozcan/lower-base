@@ -215,17 +215,14 @@ impl Strike {
     }
 }
 
-/// Every target a truck of `team` at `from` with `hp` could drive at.
-fn strikes(
-    units: &[Unit],
-    buildings: &[Building],
-    team: Team,
-    truck: u32,
-    from: (f32, f32),
-    hp: f32,
-) -> Vec<Strike> {
+/// Every target `truck` could drive at from where it is.
+fn strikes(units: &[Unit], buildings: &[Building], truck: &Unit) -> Vec<Strike> {
+    let (team, from, hp) = (truck.team, (truck.x, truck.z), truck.hp);
+    // The fire it takes on the way is counted at its present speed, although
+    // further damage slows it down.
+    let (radius, speed) = (truck.kind.radius(), truck.speed());
+    let truck = truck.id;
     let threats = threats(units, buildings, team, truck);
-    let (radius, speed) = (UnitKind::Demolition.radius(), UnitKind::Demolition.speed());
     let unit_targets = units
         .iter()
         .filter(|u| u.team != team && u.on_field())
@@ -321,19 +318,12 @@ fn choose(unit: &Unit, units: &[Unit], buildings: &[Building]) -> Option<Strike>
     } else {
         GUARD_VALUE
     };
-    let options: Vec<_> = strikes(
-        units,
-        buildings,
-        unit.team,
-        unit.id,
-        (unit.x, unit.z),
-        unit.hp,
-    )
-    .into_iter()
-    .filter(|s| {
-        !waiting || distance_sq(unit.rally_x, unit.rally_z, s.x, s.z) <= GUARD_RADIUS.powi(2)
-    })
-    .collect();
+    let options: Vec<_> = strikes(units, buildings, unit)
+        .into_iter()
+        .filter(|s| {
+            !waiting || distance_sq(unit.rally_x, unit.rally_z, s.x, s.z) <= GUARD_RADIUS.powi(2)
+        })
+        .collect();
     let best = |value: fn(&Strike) -> f32| {
         options
             .iter()
@@ -422,17 +412,10 @@ impl Game {
         }) else {
             return false;
         };
-        let send = strikes(
-            &self.units,
-            &self.buildings,
-            team,
-            truck.id,
-            (truck.x, truck.z),
-            truck.hp,
-        )
-        .into_iter()
-        .max_by(|a, b| a.score().total_cmp(&b.score()))
-        .is_some_and(|s| s.expected >= worth);
+        let send = strikes(&self.units, &self.buildings, truck)
+            .into_iter()
+            .max_by(|a, b| a.score().total_cmp(&b.score()))
+            .is_some_and(|s| s.expected >= worth);
         if send {
             let id = truck.id;
             for u in self.units.iter_mut().filter(|u| u.id == id) {

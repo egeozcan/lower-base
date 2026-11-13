@@ -64,6 +64,9 @@ During either a game or demo, **Pause** (or `P`) freezes the battlefield, produc
 - **Gather** keeps newly produced troops in front of your base. Select gathered units individually or as a group and send only those troops north.
 - **Attack** sends all gathered troops north and automatically sends newly produced troops into battle. Use **Retreat** to recall attacking troops.
 - **Retreat** recalls deployed troops to the base rally area and keeps all newly completed units inside their barracks or factory. Recalled troops defend locally once they reach the rally area; active collectors keep mining. Choose **Gather** to release sheltered troops to the rally area, or **Attack** to release them into battle. Sheltered collectors resume mining in either mode. Units inside a building are lost if it is destroyed.
+- **Damage shows, and slows units down.** A unit at half its health or less is **Damaged** (yellow health bar) and moves at 75% speed. At a quarter or less it is **Critical** (red bar) and moves at 50%. Weapons are unaffected, and nothing is repaired, so recall Damaged troops early: they are slow to get away.
+  - Hits char and bend the side of a vehicle or building that faces the attacker, and knock rubble off buildings. Damaged vehicles and buildings smoke from those wounds and Critical ones burn. Wounded infantry stoop and limp, and battered vehicles list to one side.
+  - Shell bursts, wrecks and demolition blasts leave burn marks and craters, flatten grass and blacken nearby trees for the rest of the match. The scarred ground is cosmetic: it never affects movement or combat.
 - Eliminate all enemy units and buildings to win. You lose when all your units and buildings are destroyed.
 
 The opposing commander adjusts its production to your army, retreats when an incoming force overwhelms its local defenders, and releases reserves once it has regrouped or the threat passes. Structures are constructed only on their fixed sites; there is no free building placement.
@@ -166,6 +169,46 @@ ore from 76/128 to 51/128. Early rushes are about level (126/128 to 122/128).
 The AI tournament tables in the sections below were measured before these
 changes.
 
+
+## Battle damage
+
+Damage slows units in the simulation and is shown by the renderer. Only the
+slowdown affects a match.
+
+`Unit::speed` in `src/simulation.rs` scales a unit's speed by its health:
+75% once Damaged (half health or less) and 50% once Critical (a quarter or
+less). Navigation steers with each unit's present speed, including the speed
+it expects of the allies around it. The commanders' estimates use it too: when
+Hard releases rockets behind a tank screen, when it intercepts a wave with a
+truck, and when a truck counts the fire it would take on the way to a target
+(at its present speed, although further hits slow it down).
+
+The renderer draws damage in two modules:
+
+- `web/damage.js` opens a wound on a model for each step of health it loses,
+  at a corner or edge facing the last attacker (each shot event names its
+  target). The surface around a wound chars, bends inward and sags; smoke and
+  fire rise from the newest wounds. A model's meshes and materials are
+  untouched until its first wound.
+- `web/terrain-damage.js` keeps burn marks and craters in two instanced draws
+  with fixed budgets. Repeated hits darken the mark that is already there, and
+  the oldest scar makes room once a budget is full.
+
+Measured with the benchmarks below, before and after the slowdown:
+
+| Benchmark | Before | After |
+| --- | ---: | ---: |
+| Counter battles won by the counter (`--balance`) | 72/72 | 72/72 |
+| Collector deliveries and group movement (`--traffic`) | | identical |
+| Hard against stock, stock scenarios, seeds 0–31 | 278/320 | 280/320 |
+| Hard against stock, stock scenarios, seeds 32–63 | 268/320 | 274/320 |
+| Hard against stock, all scenarios, seeds 100–107 | 311/352 | 313/352 |
+
+About one tournament match in eleven changed its outcome, in both directions.
+Truck strikes (`--trucks`) destroyed between 3 fewer and 28 more credits net.
+Of the line defenses, a truck holding against the armored wave did worse (net
+−1702 to −2472); the others moved by less than 140 credits either way. The
+tables in the other sections were measured before this change.
 
 ## Local match debug exports
 

@@ -2,6 +2,7 @@ import * as THREE from './three.module.js';
 import { CombatEffects } from './combat-effects.js';
 import { ProductionQueues } from './production-queues.js';
 import { CollectorCargo } from './collector-cargo.js';
+import { ModelDamage, condition, sootVariant } from './damage.js';
 
 // The battlefield is deliberately made from simple, lit geometry so it remains
 // readable when dozens of units are moving at once.
@@ -14,6 +15,11 @@ function mat(color, emissive = 0, intensity = 0) {
   const key = `${color}:${emissive}:${intensity}`;
   if (!mats.has(key)) mats.set(key, new THREE.MeshStandardMaterial({ color, roughness: 0.88, metalness: 0.12, emissive, emissiveIntensity: intensity }));
   return mats.get(key);
+}
+// Damaged models swap each material for one shared variant that shows soot.
+function sooted(material) {
+  if (!mats.has(material)) mats.set(material, sootVariant(material));
+  return mats.get(material);
 }
 function box(parent, w, h, d, x, y, z, material, angle = 0) {
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
@@ -186,8 +192,10 @@ function addEnvironment(scene, compact) {
     const t = trees[i];
     color.set(0xffffff); transform.position.set(t.x, .6 * t.s, t.z); transform.scale.setScalar(t.s); return true;
   }, true);
-  scatter(scene, new THREE.ConeGeometry(1.75, 3.7, 7), foliage, trees.length, treeAt(2.7, .1), true);
-  scatter(scene, new THREE.ConeGeometry(1.25, 2.8, 7), foliage, trees.length, treeAt(4.1, .14), true);
+  const canopies = [
+    scatter(scene, new THREE.ConeGeometry(1.75, 3.7, 7), foliage, trees.length, treeAt(2.7, .1), true),
+    scatter(scene, new THREE.ConeGeometry(1.25, 2.8, 7), foliage, trees.length, treeAt(4.1, .14), true),
+  ];
   const stone = new THREE.MeshStandardMaterial({color: 0xffffff, roughness: .95, flatShading: true});
   scatter(scene, new THREE.DodecahedronGeometry(1), stone, 70, (transform, color) => {
     const x = (random() < .5 ? -1 : 1) * (20.5 + random() * 28), z = random() * 146 - 73;
@@ -197,14 +205,15 @@ function addEnvironment(scene, compact) {
     color.setHSL(.12, .08, .42 + random() * .12); return true;
   }, true);
   // Low grass tufts break up the ground plane without adding shadow cost.
-  scatter(scene, new THREE.ConeGeometry(.22, .55, 4), foliage, compact ? 700 : 1500, (transform, color) => {
+  const tufts = [];
+  const grass = scatter(scene, new THREE.ConeGeometry(.22, .55, 4), foliage, compact ? 700 : 1500, (transform, color) => {
     const x = random() * 96 - 48, z = random() * 146 - 73;
     const onRoad = Math.abs(x) < 6 && Math.abs(z) < 56, onApron = Math.abs(x) < 19.5 && Math.abs(z) > 32 && Math.abs(z) < 52;
     if (onRoad || onApron || Math.abs(Math.abs(x) - 18.8) < .8 || (!outside(x, z) && random() < .55)) return false;
     const size = .6 + random() * .9;
     transform.position.set(x, -.2 + .27 * size, z); transform.rotation.set((random() - .5) * .4, random() * 6, (random() - .5) * .4);
     transform.scale.set(size, size, size);
-    color.setHSL(.16 + random() * .07, .45, .13 + random() * .07); return true;
+    color.setHSL(.16 + random() * .07, .45, .13 + random() * .07); tufts.push({x, z}); return true;
   });
   for (const side of [-1, 1]) {
     for (let z = -29; z <= 29; z += 6) {
@@ -212,6 +221,8 @@ function addEnvironment(scene, compact) {
       box(scene, .65, .12, 3.9, side * 18.8, .66, z, mat(0xc0b89e));
     }
   }
+  // The plants that battle damage can burn, in instance order.
+  return { grass: { meshes: [grass], spots: tufts }, trees: { meshes: canopies, spots: trees } };
 }
 const FOOTPRINTS = {command: [9.4, 8.6], refinery: [9.2, 7.6], factory: [8.4, 8], barracks: [7.6, 7.2], emplacement: [4.6, 4.6]};
 // An empty Standard site: corner brackets around the structure's footprint.
@@ -590,7 +601,9 @@ const wrapAngle = angle => Math.atan2(Math.sin(angle), Math.cos(angle));
 const turnToward = (current, target, step) => current + Math.max(-step, Math.min(step, wrapAngle(target - current)));
 // Units turn into their route, face targets while firing, and move with a
 // gait: infantry bob and sway, vehicles ride their suspension and raise dust.
-function animateUnit(entity, item, dt, now, effects, compact) {
+// Damage shows in how they move: wounded infantry stoop and limp, and
+// battered vehicles list to one side and shudder.
+function animateUnit(entity, item, dt, now, effects, compact, state) {
   const model = entity.group.children[0], turret = model.userData.turret;
   const dx = item.x - entity.group.position.x, dz = item.z - entity.group.position.z;
   const step = Math.hypot(dx, dz), continuous = entity.placed && step < 3;
@@ -609,9 +622,13 @@ function animateUnit(entity, item, dt, now, effects, compact) {
   }
   const vehicle = VEHICLES.has(item.kind), amount = Math.min(1, entity.speed / 2);
   entity.gait += dt * entity.speed * (vehicle ? 1.6 : 3.4);
+  entity.hurt += (state / 2 - entity.hurt) * Math.min(1, dt * 3);
+  const hurt = entity.hurt;
   if (vehicle) {
-    model.position.y = Math.sin(entity.gait * 2.3) * .035 * amount;
-    model.rotation.x = Math.sin(entity.gait * 1.7) * .015 * amount;
+    const list = entity.list * hurt, shudder = state === 2 ? Math.sin(now * .05 + entity.list * 90) * .012 : 0;
+    model.position.y = Math.sin(entity.gait * 2.3) * .035 * amount + Math.abs(list) * 1.1 + shudder;
+    model.rotation.x = Math.sin(entity.gait * 1.7) * .015 * amount + shudder;
+    model.rotation.z = list;
     entity.dust += dt * amount;
     if (entity.dust > (compact ? .2 : .1) && entity.group.visible) {
       entity.dust = 0;
@@ -621,9 +638,11 @@ function animateUnit(entity, item, dt, now, effects, compact) {
           vy: .35, vz: (Math.random() - .5) * .6, color: 0xa1977a });
     }
   } else {
-    model.position.y = Math.abs(Math.sin(entity.gait)) * .13 * amount;
-    model.rotation.z = Math.sin(entity.gait) * .07 * amount;
-    model.rotation.x = -.1 * amount;
+    // The bad leg takes a short step and the body dips over it.
+    const stride = Math.sin(entity.gait), bad = Math.min(0, stride * Math.sign(entity.list));
+    model.position.y = Math.abs(stride) * .13 * amount * (bad ? 1 - .7 * hurt : 1);
+    model.rotation.z = (stride * .07 + bad * Math.sign(entity.list) * .22 * hurt) * amount;
+    model.rotation.x = -.1 * amount - .2 * hurt;
   }
 }
 function healthBar(width) {
@@ -677,10 +696,11 @@ export class BattlefieldRenderer {
     this.scene.add(new THREE.HemisphereLight(0xd6e2f0, 0x5b4a2e, 1.7));
     const sun = new THREE.DirectionalLight(0xffdfa6, 3.5); sun.position.set(-30, 65, 25); sun.castShadow = true;
     sun.shadow.mapSize.set(compact ? 1024 : 2048, compact ? 1024 : 2048); Object.assign(sun.shadow.camera, {left:-60,right:60,top:70,bottom:-70,near:1,far:160}); sun.shadow.bias = -0.0005; sun.shadow.normalBias = .03; this.scene.add(sun);
-    addEnvironment(this.scene, compact);
+    const foliage = addEnvironment(this.scene, compact);
     this.defensePads = new Map();
     this.siteMarkers = new Map();
-    this.entities = new Map(); this.oreFields = new Map(); this.combatEffects = new CombatEffects(this.scene, compact); this.lastShotId = 0; this.lastTime = 0; this.lastFrame = performance.now(); this.raycaster = new THREE.Raycaster(); this.pointer = new THREE.Vector2();
+    this.entities = new Map(); this.oreFields = new Map(); this.combatEffects = new CombatEffects(this.scene, compact, foliage); this.lastShotId = 0; this.lastTime = 0; this.lastFrame = performance.now(); this.raycaster = new THREE.Raycaster(); this.pointer = new THREE.Vector2();
+    this.point = new THREE.Vector3();
     const pointerStarts = new Map();
     this.renderer.domElement.addEventListener('pointerdown', event => {
       pointerStarts.set(event.pointerId, [event.clientX, event.clientY]);
@@ -813,10 +833,17 @@ export class BattlefieldRenderer {
         }
         const selection = ring(isUnit && ['tank', 'demolition'].includes(item.kind) ? 1.8 : 1.25, 0x9eff40, .95); selection.visible = false; group.add(selection);
         const hp = healthBar(isUnit ? 1.8 : 4.5); hp.position.y = isUnit ? (item.kind === 'tank' ? 2.3 : 2.5) : (item.kind === 'command' ? 6.8 : 5.1); group.add(hp);
-        this.scene.add(group); entity = {group, selection, hp, hitTarget, cargo, kind: item.kind, isUnit, selectable: false, recoilUntil: 0, emission: 0,
-          placed: false, speed: 0, gait: 0, dust: 0, heading: undefined, aimYaw: 0, aimUntil: 0}; this.entities.set(key, entity);
+        const profile = !isUnit ? (item.kind === 'emplacement' ? 'emplacement' : 'structure') : VEHICLES.has(item.kind) ? 'vehicle' : 'infantry';
+        const damage = new ModelDamage(group.children[0], profile, {soot: sooted, rubble: mat(0xffffff)});
+        this.scene.add(group); entity = {group, selection, hp, hitTarget, cargo, damage, kind: item.kind, isUnit, selectable: false, recoilUntil: 0, emission: 0,
+          placed: false, speed: 0, gait: 0, dust: 0, heading: undefined, aimYaw: 0, aimUntil: 0,
+          // Health and where the last hit came from, for the damage shown on the model.
+          fraction: 1, hitFrom: null, hitAt: -Infinity,
+          // Which way a battered vehicle lists, or which leg a wounded soldier favors.
+          hurt: 0, list: (Math.random() < .5 ? -1 : 1) * (.07 + Math.random() * .04)}; this.entities.set(key, entity);
       }
-      if (isUnit) animateUnit(entity, item, dt, now, this.combatEffects, this.compact);
+      const fraction = entity.fraction = Math.max(0, item.hp / item.max_hp), state = condition(fraction);
+      if (isUnit) animateUnit(entity, item, dt, now, this.combatEffects, this.compact, state);
       entity.group.position.set(item.x, 0, item.z);
       entity.group.visible = item.state !== 'garrison';
       entity.cargo?.update(item, snapshot.buildings, dt, this.combatEffects.reducedMotion.matches);
@@ -831,19 +858,10 @@ export class BattlefieldRenderer {
       entity.selectable = isUnit && item.team === 'player' && item.state === 'gather';
       entity.selection.visible = entity.selectable && selected.has(item.id);
       entity.hp.visible = item.hp < item.max_hp || entity.selection.visible || item.construction_remaining > 0;
-      const fraction = Math.max(0, item.hp / item.max_hp); entity.hp.userData.fill.scale.x = fraction;
+      entity.hp.userData.fill.scale.x = fraction;
       entity.hp.userData.fill.position.x = -(1 - fraction) * (isUnit ? 1.8 : 4.5) / 2;
-      entity.hp.userData.fill.material.color.setHex(fraction > .5 ? 0x76e6a3 : fraction > .25 ? 0xf8c65f : 0xff7065);
+      entity.hp.userData.fill.material.color.setHex([0x76e6a3, 0xf8c65f, 0xff7065][state]);
       entity.hp.quaternion.copy(this.camera.quaternion);
-      if (entity.group.visible && (!isUnit || ['tank', 'collector', 'demolition'].includes(item.kind)) && fraction < .5) {
-        entity.emission += dt;
-        if (entity.emission > .18) {
-          entity.emission = 0;
-          const origin = { x: item.x, y: isUnit ? 1.6 : 2.7, z: item.z };
-          if (fraction < .25) this.combatEffects.burn(origin, isUnit ? .65 : 1.2);
-          else this.combatEffects.smokePuff(origin, isUnit ? .7 : 1.3);
-        }
-      } else entity.emission = 0;
     }
     for (const shot of snapshot.shots || []) {
       if (shot.id <= this.lastShotId) continue;
@@ -854,13 +872,20 @@ export class BattlefieldRenderer {
         entity.aimUntil = now + (shot.kind === 'tank' ? 2600 : 1400);
         if (shot.kind === 'tank') entity.recoilUntil = now + 240;
       }
+      const victim = this.entities.get(`${shot.target_is_unit ? 'u' : 'b'}${shot.target_id}`);
+      if (victim) { victim.hitFrom = shot; victim.hitAt = now; }
       this.combatEffects.fire(shot);
     }
     for (const blast of snapshot.explosions || []) {
       if (blast.id <= (this.lastExplosionId || 0)) continue;
       this.lastExplosionId = blast.id;
+      for (const victim of this.entities.values()) {
+        const { x, z } = victim.group.position;
+        if (Math.hypot(x - blast.x, z - blast.z) < blast.radius + 4) { victim.hitFrom = blast; victim.hitAt = now; }
+      }
       this.combatEffects.explode(blast);
     }
+    for (const [key, entity] of this.entities) if (alive.has(key)) this.showDamage(entity, dt, now);
     for (const [key, entity] of this.entities) if (!alive.has(key)) {
       if (!restarting && entity.group.visible) this.combatEffects.destroy(entity);
       this.removeEntity(entity);
@@ -878,12 +903,32 @@ export class BattlefieldRenderer {
     this.camera.updateMatrixWorld();
     this.renderer.render(this.scene, this.camera);
   }
+  // Health lost shows on the model itself. New wounds face the last attacker
+  // and throw off debris; Damaged vehicles and buildings smoke from their
+  // wounds, and Critical ones burn.
+  showDamage(entity, dt, now) {
+    const heavy = !entity.isUnit || VEHICLES.has(entity.kind), visible = entity.group.visible;
+    const opened = entity.damage.update(entity.fraction, now - entity.hitAt < 3000 ? entity.hitFrom : null);
+    if (heavy && visible) for (const wound of opened) {
+      this.combatEffects.burst(entity.damage.locate(wound, this.point), entity.isUnit ? .45 : .9, false);
+    }
+    const state = condition(entity.fraction);
+    if (!heavy || !visible || !state || !entity.damage.wounds.length) { entity.emission = 0; return; }
+    entity.emission += dt;
+    if (entity.emission < .18) return;
+    entity.emission = 0;
+    const origin = entity.damage.vent(state === 2 ? 3 : 4, this.point);
+    if (state === 2) this.combatEffects.burn(origin, entity.isUnit ? .65 : 1.2);
+    else this.combatEffects.smokePuff(origin, entity.isUnit ? .7 : 1.3);
+  }
   removeEntity(entity) {
     entity.cargo?.dispose();
     this.scene.remove(entity.group);
+    const shared = new Set(mats.values());
     entity.group.traverse(object => {
       object.geometry?.dispose();
-      if (object.material && ![...mats.values()].includes(object.material)) object.material.dispose();
+      if (object.isInstancedMesh) object.dispose();
+      if (object.material && !shared.has(object.material)) object.material.dispose();
     });
   }
   dispose() {

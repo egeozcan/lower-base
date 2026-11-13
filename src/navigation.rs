@@ -658,7 +658,7 @@ fn plan(
     terrain: &Terrain,
 ) -> ((f32, f32), f32, bool) {
     let from = (unit.x, unit.z);
-    let speed = unit.kind.speed();
+    let speed = unit.speed();
     if !terrain.open(from) {
         if let Some(exit) = escape(from, terrain) {
             // Plan afresh once clear.
@@ -728,7 +728,7 @@ pub(super) fn move_toward(
 ) {
     let from = (unit.x, unit.z);
     let remaining = distance(from, goal);
-    let (radius, speed) = (unit.kind.radius(), unit.kind.speed());
+    let (radius, speed) = (unit.kind.radius(), unit.speed());
     // An arrived unit only moves to let others through. Units taking their
     // place give way to traffic passing through it.
     let arrived = remaining <= stop + 0.01;
@@ -808,7 +808,7 @@ pub(super) fn move_toward(
         let ally = other.team == unit.team;
         let mut velocity = if ally { motion(other, dt) } else { (0.0, 0.0) };
         // Too far away to touch within the horizon.
-        if length(offset) - reach > (speed + other.kind.speed()) * HORIZON {
+        if length(offset) - reach > (speed + other.speed()) * HORIZON {
             continue;
         }
         // Only allies make way for each other.
@@ -830,20 +830,16 @@ pub(super) fn move_toward(
                 length: other.navigation.ahead + reach,
             };
             let along = -offset.0 * heading.0 - offset.1 * heading.1;
-            let leaving =
-                preferred.0 * heading.0 + preferred.1 * heading.1 >= 0.8 * other.kind.speed();
+            let leaving = preferred.0 * heading.0 + preferred.1 * heading.1 >= 0.8 * other.speed();
             if !leaving
-                && along - reach < other.kind.speed() * YIELD_AHEAD
+                && along - reach < other.speed() * YIELD_AHEAD
                 && lane.depth((0.0, 0.0)) > 0.0
             {
                 lanes.push(lane);
                 // Expect it to keep coming, even if it paused for this unit:
                 // moving back into its way whenever it hesitates would
                 // leave both units shuffling in place.
-                velocity = (
-                    heading.0 * other.kind.speed(),
-                    heading.1 * other.kind.speed(),
-                );
+                velocity = (heading.0 * other.speed(), heading.1 * other.speed());
             }
         }
         neighbors.push(Neighbor {

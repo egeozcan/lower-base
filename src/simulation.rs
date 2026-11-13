@@ -65,6 +65,13 @@ const COMMAND_INTERVAL: f32 = 1.0;
 const DEMOLITION_RADIUS: f32 = 7.0;
 const DEMOLITION_DAMAGE: f32 = 450.0;
 const DEMOLITION_CORE: f32 = 2.0;
+// Damage slows every unit down: a Damaged unit has half its health or less
+// and a Critical one a quarter or less. The health bar turns yellow and red
+// at the same marks.
+const DAMAGED_HEALTH: f32 = 0.5;
+const DAMAGED_SPEED: f32 = 0.75;
+const CRITICAL_HEALTH: f32 = 0.25;
+const CRITICAL_SPEED: f32 = 0.5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -379,6 +386,18 @@ impl Unit {
     fn on_field(&self) -> bool {
         self.hp > 0.0 && self.state != UnitState::Garrison
     }
+    /// Movement speed at the unit's present health.
+    fn speed(&self) -> f32 {
+        let health = self.hp / self.max_hp;
+        self.kind.speed()
+            * if health <= CRITICAL_HEALTH {
+                CRITICAL_SPEED
+            } else if health <= DAMAGED_HEALTH {
+                DAMAGED_SPEED
+            } else {
+                1.0
+            }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -420,6 +439,9 @@ pub struct CombatShot {
     pub time: f32,
     pub source_id: u32,
     pub source_is_unit: bool,
+    // What the shot was aimed at, so hits can be shown on the right model.
+    pub target_id: u32,
+    pub target_is_unit: bool,
     pub kind: UnitKind,
     pub source_y: f32,
     pub target_y: f32,
@@ -1716,17 +1738,19 @@ impl Game {
                         unit.kind.damage(None)
                     };
                 }
-                let (target_x, target_y, target_z) = if let Some(j) = firing_target {
-                    (snapshot[j].x, 1.1, snapshot[j].z)
+                let (target_id, target_x, target_y, target_z) = if let Some(j) = firing_target {
+                    (snapshot[j].id, snapshot[j].x, 1.1, snapshot[j].z)
                 } else {
                     let (j, _) = target_building.unwrap();
-                    (buildings[j].x, 2.0, buildings[j].z)
+                    (buildings[j].id, buildings[j].x, 2.0, buildings[j].z)
                 };
                 self.shots.push(CombatShot {
                     id: self.next_shot_id,
                     time: self.time,
                     source_id: unit.id,
                     source_is_unit: true,
+                    target_id,
+                    target_is_unit: unit_in_range,
                     kind: unit.kind,
                     source_y: match unit.kind {
                         UnitKind::Tank => 1.7,
@@ -1824,6 +1848,8 @@ impl Game {
                             time: self.time,
                             source_id: b.id,
                             source_is_unit: false,
+                            target_id: target.id,
+                            target_is_unit: true,
                             kind: UnitKind::Tank,
                             source_y: 1.8,
                             target_y: 1.1,
@@ -1856,6 +1882,8 @@ impl Game {
                         time: self.time,
                         source_id: b.id,
                         source_is_unit: false,
+                        target_id: snapshot[j].id,
+                        target_is_unit: true,
                         kind: UnitKind::Soldier,
                         source_y: 4.4,
                         target_y: 1.1,
@@ -2864,6 +2892,7 @@ mod tests {
             let shot = &g.shots[0];
             assert_eq!(shot.source_id, source_id);
             assert!(shot.source_is_unit);
+            assert_eq!((shot.target_id, shot.target_is_unit), (g.units[1].id, true));
             assert_eq!(shot.kind, kind);
             assert_eq!(
                 (shot.x, shot.z, shot.target_x, shot.target_z),
@@ -2891,7 +2920,15 @@ mod tests {
             (attack.target_x, attack.target_y, attack.target_z),
             (5.0, 2.0, 0.0)
         );
+        assert_eq!(
+            (attack.target_id, attack.target_is_unit),
+            (g.buildings[0].id, false)
+        );
         let defense = &g.shots[1];
+        assert_eq!(
+            (defense.target_id, defense.target_is_unit),
+            (g.units[0].id, true)
+        );
         assert!(!defense.source_is_unit);
         assert_eq!(defense.source_id, g.buildings[0].id);
         assert_eq!((defense.x, defense.source_y, defense.z), (5.0, 4.4, 0.0));
@@ -2947,6 +2984,60 @@ mod tests {
             unit.x,
             unit.z
         );
+    }
+
+    #[test]
+    fn damage_slows_units_at_half_and_quarter_health() {
+        // Distance covered toward a far rally point in one second.
+        let advance = |kind: UnitKind, health: f32| {
+            let mut g = isolated_units(&[(Team::Player, kind, 0.0, 20.0)]);
+            g.units[0].hp = kind.health() * health;
+            g.units[0].rally_z = -20.0;
+            for _ in 0..20 {
+                g.combat_and_move(0.05);
+                g.resolve_collisions();
+            }
+            20.0 - g.units[0].z
+        };
+        for kind in [
+            UnitKind::Soldier,
+            UnitKind::Rocket,
+            UnitKind::Tank,
+            UnitKind::Demolition,
+        ] {
+            let full = advance(kind, 1.0);
+            assert!((full - kind.speed()).abs() < 0.01, "{kind:?}: {full}");
+            for (health, share) in [
+                (0.51, 1.0),
+                (0.5, DAMAGED_SPEED),
+                (0.26, DAMAGED_SPEED),
+                (0.25, CRITICAL_SPEED),
+                (0.01, CRITICAL_SPEED),
+            ] {
+                let covered = advance(kind, health);
+                assert!(
+                    (covered - full * share).abs() < 0.01,
+                    "{kind:?} at {health} health covered {covered} of {full}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn damaged_collectors_haul_ore_more_slowly() {
+        let drive = |health: f32| {
+            let mut g = collectors_at(Team::Player, &[(5.4, 20.0, COLLECTOR_CAPACITY)]);
+            g.units[0].hp = UnitKind::Collector.health() * health;
+            let start = (g.units[0].x, g.units[0].z);
+            for _ in 0..20 {
+                g.harvest_and_unload(0.05);
+            }
+            distance_sq(g.units[0].x, g.units[0].z, start.0, start.1).sqrt()
+        };
+        let full = drive(1.0);
+        assert!((full - UnitKind::Collector.speed()).abs() < 0.01, "{full}");
+        assert!((drive(0.5) - full * DAMAGED_SPEED).abs() < 0.01);
+        assert!((drive(0.25) - full * CRITICAL_SPEED).abs() < 0.01);
     }
 
     #[test]
