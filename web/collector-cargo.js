@@ -2,7 +2,8 @@ import * as THREE from './three.module.js';
 
 const CAPACITY = 100;
 // Normalized simulation progress: turn/raise, pour, then lower before departing.
-const POUR_START = .3, POUR_END = .75, FLIGHT = .2;
+export const POUR_START = .3;
+const POUR_END = .75, FLIGHT = .2;
 const clamp = value => Math.max(0, Math.min(1, value));
 const smooth = value => { const t = clamp(value); return t * t * (3 - 2 * t); };
 

@@ -1,7 +1,7 @@
 import * as THREE from './three.module.js';
 import { CombatEffects } from './combat-effects.js';
 import { ProductionQueues } from './production-queues.js';
-import { CollectorCargo } from './collector-cargo.js';
+import { CollectorCargo, POUR_START } from './collector-cargo.js';
 import { ModelDamage, condition, sootVariant } from './damage.js';
 
 // The battlefield is deliberately made from simple, lit geometry so it remains
@@ -679,8 +679,10 @@ function oreMesh(deposit) {
 }
 
 export class BattlefieldRenderer {
-  constructor(container, onSelect = () => {}, onCancelTraining = () => {}, onEjectGarrisoned = () => {}) {
+  constructor(container, onSelect = () => {}, onCancelTraining = () => {}, onEjectGarrisoned = () => {}, audio = null) {
     this.container = container; this.onSelect = onSelect; this.view = 'map';
+    this.audio = audio; this.heard = new THREE.Vector3();
+    const sound = this.sound = (name, x, z, options) => this.audio?.play(name, { ...this.hear(x, z), ...options });
     this.scene = new THREE.Scene(); this.scene.background = new THREE.Color(0x78805b);
     this.scene.fog = new THREE.Fog(0x78805b, 130, 230);
     this.camera = new THREE.OrthographicCamera(-25, 25, 45, -45, .1, 300);
@@ -699,7 +701,7 @@ export class BattlefieldRenderer {
     const foliage = addEnvironment(this.scene, compact);
     this.defensePads = new Map();
     this.siteMarkers = new Map();
-    this.entities = new Map(); this.oreFields = new Map(); this.combatEffects = new CombatEffects(this.scene, compact, foliage); this.lastShotId = 0; this.lastTime = 0; this.lastFrame = performance.now(); this.raycaster = new THREE.Raycaster(); this.pointer = new THREE.Vector2();
+    this.entities = new Map(); this.oreFields = new Map(); this.combatEffects = new CombatEffects(this.scene, compact, foliage, sound); this.lastShotId = 0; this.lastTime = 0; this.lastFrame = performance.now(); this.raycaster = new THREE.Raycaster(); this.pointer = new THREE.Vector2();
     this.point = new THREE.Vector3();
     const pointerStarts = new Map();
     this.renderer.domElement.addEventListener('pointerdown', event => {
@@ -743,6 +745,13 @@ export class BattlefieldRenderer {
   setView(view) {
     this.view = view === 'base' ? 'base' : 'map';
     this.resize();
+  }
+  // Where a spot on the field is heard from: panned across the view, and
+  // marked as far away once it lies outside it.
+  hear(x, z) {
+    const point = this.heard.set(x, 1, z).project(this.camera);
+    return { pan: Math.max(-.85, Math.min(.85, point.x * 1.5)),
+      far: Math.max(Math.abs(point.x), Math.abs(point.y)) > 1.1 };
   }
   resize() {
     const w = Math.max(1, this.container.clientWidth), h = Math.max(1, this.container.clientHeight);
@@ -815,6 +824,7 @@ export class BattlefieldRenderer {
     }
     const selected = selectedIds instanceof Set ? selectedIds : new Set(selectedIds);
     const alive = new Set();
+    let driving = 0;
     for (const item of [...snapshot.buildings, ...snapshot.units]) {
       const isUnit = 'state' in item, key = `${isUnit ? 'u' : 'b'}${item.id}`; alive.add(key);
       let entity = this.entities.get(key);
@@ -847,6 +857,12 @@ export class BattlefieldRenderer {
       entity.group.position.set(item.x, 0, item.z);
       entity.group.visible = item.state !== 'garrison';
       entity.cargo?.update(item, snapshot.buildings, dt, this.combatEffects.reducedMotion.matches);
+      if (entity.cargo) {
+        const pouring = item.unload_progress >= POUR_START && entity.group.visible;
+        if (pouring && !entity.pouring) this.sound('pour', item.x, item.z);
+        entity.pouring = pouring;
+      }
+      if (isUnit && VEHICLES.has(item.kind) && entity.group.visible) driving += Math.min(1, entity.speed / 2);
       if (!isUnit && item.construction_time > 0) {
         // Structures rise from their foundations while under construction.
         entity.group.children[0].scale.y = .25 + .75 * (1 - item.construction_remaining / item.construction_time);
@@ -892,6 +908,7 @@ export class BattlefieldRenderer {
       this.entities.delete(key);
     }
     this.combatEffects.update(dt, this.camera);
+    this.audio?.setRumble(1 - Math.exp(-driving / 5));
     const shake = this.combatEffects.reducedMotion.matches ? 0 : this.combatEffects.shake;
     const quake = this.combatEffects.reducedMotion.matches ? 0 : 1.6 * this.combatEffects.demolitionShake ** 2;
     const focusZ = this.view === 'base' ? 30 : 0;

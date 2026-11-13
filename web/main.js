@@ -3,6 +3,7 @@ import { BattlefieldRenderer } from './renderer.js';
 import { BUILD_INFO } from './pkg/build_config.js';
 import { MatchDebugRecorder, createDebugActions } from './match-debug.mjs';
 import { Vector3 } from './three.module.js';
+import { GameAudio } from './audio.js';
 
 const $ = id => document.getElementById(id);
 const selected = new Set();
@@ -24,6 +25,11 @@ const specs = [
   },
 ];
 let game, renderer, snapshot, lastTime = 0, ended = false, paused = false, demo = false;
+const audio = new GameAudio();
+// Browsers start audio only from a user gesture, so every gesture offers one.
+for (const type of ['pointerdown', 'pointerup', 'keydown', 'click']) {
+  window.addEventListener(type, () => audio.unlock(), { capture: true });
+}
 const SPEEDS = [0.5, 1, 2, 4];
 let speedIndex = 1;
 const debugEnabled = BUILD_INFO.development && typeof GameBridge.prototype.debug_snapshot === 'function';
@@ -40,6 +46,7 @@ const modeDescriptions = {
 };
 for (const input of document.querySelectorAll('input[name="game-mode"]')) {
   input.addEventListener('change', () => {
+    audio.play('click');
     $('mode-description').textContent = modeDescriptions[input.value];
   });
 }
@@ -51,22 +58,37 @@ const structures = [
 ];
 for (const input of document.querySelectorAll('input[name="difficulty"]')) {
   input.addEventListener('change', () => {
+    audio.play('click');
     $('difficulty-description').textContent = difficultyDescriptions[input.value];
   });
 }
 function canCommand() { return game && !demo && !paused && !ended && snapshot?.outcome === 'playing'; }
-function train(kind) { if (canCommand()) { debugRecorder?.command('train', { kind }, snapshot.time); game.train(kind); refresh(); } }
+// The simulation accepts or refuses an order; the sound says which.
+const queued = () => snapshot.barracks_queue.length + snapshot.factory_queue.length;
+const structureCount = () => snapshot.buildings.filter(b => b.team === 'player').length;
+function train(kind) {
+  if (!canCommand()) return;
+  const before = queued();
+  debugRecorder?.command('train', { kind }, snapshot.time);
+  game.train(kind);
+  refresh();
+  audio.play(queued() > before ? 'queue' : 'denied');
+}
 function buildEmplacement(slot) {
   if (!canCommand()) return;
+  const before = structureCount();
   debugRecorder?.command('build_emplacement', { slot }, snapshot.time);
   game.build_emplacement(slot);
   refresh();
+  audio.play(structureCount() > before ? 'build' : 'denied');
 }
 function construct(kind) {
   if (!canCommand() || snapshot.game_mode !== 'standard') return;
+  const before = structureCount();
   debugRecorder?.command('construct', { kind }, snapshot.time);
   game.construct(kind);
   refresh();
+  audio.play(structureCount() > before ? 'build' : 'denied');
 }
 const finished = building => building.hp > 0 && building.construction_remaining <= 0;
 function beginMatch(isDemo = false) {
@@ -101,11 +123,13 @@ function beginMatch(isDemo = false) {
   $('restart').textContent = demo ? 'WATCH AGAIN' : 'PLAY AGAIN';
   setHudInert(false);
   try {
-    if (!renderer) renderer = new BattlefieldRenderer($('scene'), onSelect, cancelTraining, ejectGarrisoned);
+    if (!renderer) renderer = new BattlefieldRenderer($('scene'), onSelect, cancelTraining, ejectGarrisoned, audio);
     renderer.reset();
     setSpeed(speedIndex);
     setView('map');
     $('pause').focus();
+    audio.setWorld(true);
+    audio.play('start');
   } catch (error) {
     console.error(error);
     abortMatch();
@@ -117,6 +141,7 @@ function setHudInert(value) {
   for (const element of $('app').children) if (element.id !== 'pause-screen') element.inert = value;
 }
 function abortMatch() {
+  audio.setWorld(false);
   debugRecorder = null;
   debugReport = null;
   debugActions?.reset();
@@ -147,8 +172,16 @@ function setPaused(value) {
   $('pause-screen').hidden = !paused;
   setHudInert(paused);
   if (!paused) renderer.lastFrame = performance.now();
+  audio.setWorld(!paused);
+  audio.play(paused ? 'pause' : 'resume');
   refresh();
   $(paused ? 'resume' : 'pause').focus();
+}
+function setMuted(value) {
+  audio.setMuted(value);
+  $('sound').setAttribute('aria-pressed', String(value));
+  $('sound').title = `Sound ${value ? 'off' : 'on'}: click or press M to ${value ? 'unmute' : 'mute'}`;
+  audio.play('click');
 }
 
 // Sidebar cameos follow the hotkey order; the anti-tank pads are static markup.
@@ -167,15 +200,17 @@ function cancelTraining(building, index) {
   debugRecorder?.command('cancel_training', { building, index }, snapshot.time);
   game.cancel_training(building, index);
   refresh();
+  audio.play('cancel');
 }
 function ejectGarrisoned(id) {
   if (!canCommand()) return;
   debugRecorder?.command('eject_garrisoned', { id }, snapshot.time);
   game.eject_garrisoned(id);
   refresh();
+  audio.play('select');
 }
-function setMode(mode) { if (!canCommand()) return; debugRecorder?.command('set_mode', { mode }, snapshot.time); game.set_mode(mode); selected.clear(); refresh(); }
-function sendSelected() { if (!canCommand() || !selected.size) return; debugRecorder?.command('attack_selected', { ids: [...selected] }, snapshot.time); game.attack_selected(new Uint32Array([...selected])); selected.clear(); refresh(); }
+function setMode(mode) { if (!canCommand()) return; debugRecorder?.command('set_mode', { mode }, snapshot.time); game.set_mode(mode); selected.clear(); refresh(); audio.play(mode); }
+function sendSelected() { if (!canCommand() || !selected.size) return; debugRecorder?.command('attack_selected', { ids: [...selected] }, snapshot.time); game.attack_selected(new Uint32Array([...selected])); selected.clear(); refresh(); audio.play('send'); }
 function onSelect(id, additive, touch) {
   if (!canCommand()) return;
   // A tap on open ground clears the selection; a tap on a unit toggles it.
@@ -187,6 +222,7 @@ function onSelect(id, additive, touch) {
     selected.clear();
     selected.add(id);
   }
+  if (id !== null) audio.play('select');
   refresh();
 }
 function setText(element, text) { if (element.textContent !== text) element.textContent = text; }
@@ -194,16 +230,42 @@ function setText(element, text) { if (element.textContent !== text) element.text
 // EVA-style status line: derived from snapshots only, it never affects the match.
 const onlineGuns = new Set(), onlineStructures = new Set();
 let lastUnitCount = null, statusTimer = 0;
-function announce(message) {
+function announce(message, sound) {
   const status = $('hud-status');
   status.textContent = message;
   status.hidden = false;
   clearTimeout(statusTimer);
   statusTimer = setTimeout(() => { status.hidden = true; }, 2200);
+  audio.play(sound);
+}
+// Raise the alarm when one of our buildings is hit or lost, then stay quiet
+// for a while: a base under siege is hit many times a second.
+const ALARM_INTERVAL = 15000;
+const buildingHealth = new Map(), unloading = new Set();
+let lastAlarm = -Infinity;
+function watchBase() {
+  const buildings = snapshot.buildings.filter(b => b.team === 'player');
+  const attacked = buildings.length < buildingHealth.size
+    || buildings.some(b => b.hp < (buildingHealth.get(b.id) ?? b.hp));
+  buildingHealth.clear();
+  for (const b of buildings) buildingHealth.set(b.id, b.hp);
+  if (attacked && performance.now() - lastAlarm > ALARM_INTERVAL) {
+    lastAlarm = performance.now();
+    announce('BASE UNDER ATTACK', 'alert');
+  }
+  // A collector that has finished unloading has just been paid.
+  for (const unit of snapshot.units) {
+    if (unit.team !== 'player' || unit.kind !== 'collector') continue;
+    if (unit.unload_progress > 0) unloading.add(unit.id);
+    else if (unloading.delete(unit.id)) audio.play('credit');
+  }
 }
 function resetHud() {
   onlineGuns.clear();
   onlineStructures.clear();
+  buildingHealth.clear();
+  unloading.clear();
+  lastAlarm = -Infinity;
   lastUnitCount = null;
   clearTimeout(statusTimer);
   $('hud-status').hidden = true;
@@ -328,7 +390,7 @@ function refresh() {
     if (building) button.style.setProperty('--progress', Math.max(0, Math.min(1, 1 - structure.construction_remaining / structure.construction_time)));
     setText(button.querySelector('.cameo-cost'), online ? 'ONLINE' : building ? `${Math.ceil(structure.construction_remaining)}s` : command ? String(cost) : 'LOST');
     if (snapshot.game_mode === 'standard') {
-      if (online && !onlineStructures.has(kind) && !demo && snapshot.time > 0) announce('CONSTRUCTION COMPLETE');
+      if (online && !onlineStructures.has(kind) && !demo && snapshot.time > 0) announce('CONSTRUCTION COMPLETE', 'complete');
       if (online) onlineStructures.add(kind); else onlineStructures.delete(kind);
     }
   }
@@ -342,12 +404,13 @@ function refresh() {
     button.classList.toggle('is-building', building);
     if (building) button.style.setProperty('--progress', Math.max(0, Math.min(1, 1 - gun.construction_remaining / gun.construction_time)));
     setText(button.querySelector('.cameo-cost'), online ? 'ONLINE' : building ? `${Math.ceil(gun.construction_remaining)}s` : command ? '200' : 'LOST');
-    if (online && !onlineGuns.has(slot) && !demo) announce('CONSTRUCTION COMPLETE');
+    if (online && !onlineGuns.has(slot) && !demo) announce('CONSTRUCTION COMPLETE', 'complete');
     if (online) onlineGuns.add(slot); else onlineGuns.delete(slot);
   }
   const playerUnits = snapshot.units.filter(u => u.team === 'player').length;
-  if (lastUnitCount !== null && playerUnits > lastUnitCount && !demo) announce('UNIT READY');
+  if (lastUnitCount !== null && playerUnits > lastUnitCount && !demo) announce('UNIT READY', 'ready');
   lastUnitCount = playerUnits;
+  if (!demo && snapshot.outcome === 'playing') watchBase();
   drawRadar();
   if (!paused) renderer.update(snapshot, selected);
   $('pause').disabled = snapshot.outcome !== 'playing';
@@ -362,6 +425,7 @@ function refresh() {
       debugActions.show();
     }
     const victory = snapshot.outcome === 'victory';
+    audio.play(victory || demo ? 'victory' : 'defeat');
     $('result-title').textContent = demo ? (victory ? 'BLUE WINS' : 'RED WINS') : (victory ? 'VICTORY' : 'DEFEAT');
     $('game-over').classList.remove('hidden');
     $('restart').focus();
@@ -408,6 +472,13 @@ $('pause').addEventListener('click', () => setPaused(true));
 $('resume').addEventListener('click', () => setPaused(false));
 $('speed').addEventListener('click', event => setSpeed((speedIndex + (event.shiftKey ? SPEEDS.length - 1 : 1)) % SPEEDS.length));
 for (const id of ['abort', 'pause-abort', 'end-menu']) $(id).addEventListener('click', abortMatch);
+$('sound').addEventListener('click', () => setMuted(!audio.muted));
+setMuted(audio.muted);
+// Controls without a sound of their own get a plain click.
+document.addEventListener('click', event => {
+  const control = event.target.closest('button, a');
+  if (control && !control.matches('.cmd, .cameo, .queue-unit, #pause, #resume, #start-game, #start-demo, #restart, #sound')) audio.play('click');
+});
 window.addEventListener('keydown', event => {
   if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || !game) return;
   if (event.key.toLowerCase() === 'p' || (paused && event.key === 'Escape')) {
@@ -415,6 +486,7 @@ window.addEventListener('keydown', event => {
     setPaused(!paused);
     return;
   }
+  if (event.key.toLowerCase() === 'm') { setMuted(!audio.muted); return; }
   if (paused) {
     if (event.key === 'Tab') {
       event.preventDefault();
@@ -422,8 +494,8 @@ window.addEventListener('keydown', event => {
     }
     return;
   }
-  if (event.key === '+' || event.key === '=') { setSpeed(speedIndex + 1); return; }
-  if (event.key === '-' || event.key === '_') { setSpeed(speedIndex - 1); return; }
+  if (event.key === '+' || event.key === '=') { setSpeed(speedIndex + 1); audio.play('click'); return; }
+  if (event.key === '-' || event.key === '_') { setSpeed(speedIndex - 1); audio.play('click'); return; }
   if (!canCommand()) return;
   if (event.key === '1') setMode('gather');
   if (event.key === '2') setMode('attack');

@@ -61,8 +61,10 @@ function particleBatch(scene, capacity, smoke) {
 }
 
 export class CombatEffects {
-  constructor(scene, compact, foliage) {
+  // `sound(name, x, z, options)` plays a sound at a place on the field.
+  constructor(scene, compact, foliage, sound = () => {}) {
     this.scene = scene;
+    this.sound = sound;
     this.ground = new TerrainDamage(scene, compact, foliage);
     this.smoke = particleBatch(scene, compact ? 220 : 440, true);
     this.glow = particleBatch(scene, compact ? 280 : 560, false);
@@ -136,6 +138,9 @@ export class CombatEffects {
     this.emit('flash', start, { size: heavy ? 1.8 : .75, stretch: .8, life: heavy ? .11 : .07,
       vy: 0, color: 0xffe9ad });
     if (heavy) this.smokePuff(start, .55);
+    const weapon = shot.source_is_unit ? { soldier: 'rifle', rocket: 'rocket', tank: 'cannon' }[shot.kind]
+      : heavy ? 'gun' : 'command';
+    this.sound(weapon, shot.x, shot.z);
     const geometry = new THREE.BufferGeometry().setFromPoints([start, start]);
     const material = new THREE.LineBasicMaterial({ color: heavy ? 0xffb448 : 0xffe5a1,
       transparent: true, opacity: 1, depthWrite: false, toneMapped: false });
@@ -153,11 +158,13 @@ export class CombatEffects {
     // Guns fire the heaviest shell, then tanks, then rocket troopers.
     if (scar) scar.radius = !shot.source_is_unit ? 1.7 : shot.kind === 'tank' ? 1.1 : .85;
     this.projectiles.push({ mesh, start, end, age: 0, trail: 0, kind: shot.kind, scar,
+      loudness: !shot.source_is_unit ? 1.3 : shot.kind === 'tank' ? 1 : .8,
       duration: heavy ? Math.max(.1, start.distanceTo(end) / (shot.kind === 'tank' ? 65 : 36)) : .085 });
   }
   explode(blast) {
     const origin = { x: blast.x, y: 1.2, z: blast.z };
     this.burst(origin, 3.8);
+    this.sound('demolition', blast.x, blast.z);
     this.demolitionShake = 1;
     // A fast ground-level pressure front, rising fireball and hot flying debris.
     for (let i = 0; i < 24; i++) {
@@ -194,7 +201,11 @@ export class CombatEffects {
     const heavy = vehicle || !entity.isUnit;
     const scale = !entity.isUnit ? 2.5 : vehicle ? 1.25 : .45;
     const position = entity.group.position.clone(); position.y = heavy ? 1.3 : .5;
-    if (entity.kind !== 'demolition') this.burst(position, scale, heavy);
+    if (entity.kind !== 'demolition') {
+      this.burst(position, scale, heavy);
+      this.sound(!entity.isUnit ? 'collapse' : vehicle ? 'wreck' : 'fall', position.x, position.z,
+        { size: entity.kind === 'emplacement' ? .6 : 1 });
+    }
     // Keep the actual silhouette as a scorched wreck. The model is detached
     // before its selection and health UI are disposed by the renderer.
     const model = entity.group.children[0];
@@ -273,6 +284,7 @@ export class CombatEffects {
       }
       if (t < 1) return true;
       this.burst(p.end, p.kind === 'soldier' ? .18 : .55, p.kind !== 'soldier');
+      if (p.kind !== 'soldier') this.sound('impact', p.end.x, p.end.z, { size: p.loudness });
       if (p.scar) this.ground.scorch(p.scar.x, p.scar.z, p.scar.radius, .36);
       this.removeProjectile(p); return false;
     });

@@ -60,7 +60,8 @@ During either a game or demo, **Pause** (or `P`) freezes the battlefield, produc
 - Collectors are unarmed and mine independently once deployed. Each works one ore field until it runs out, chosen by driving distance to the refinery. Collectors spread across both flanks of the base so they do not meet head-on in the narrow gaps beside the factory and barracks. A collector whose field runs out mid-load fills up at another field when that is worth the detour. Collectors completed during Retreat wait inside the factory until Gather or Attack releases them. Protect them and your refinery to keep ore income flowing. The opposing commander also builds collectors.
 - Click a gathered unit to select it; Shift-click to add or remove units. On touchscreens, tap units to toggle their selection. Tap empty ground to clear it. Use **Send** to commit the selected units.
 - Use **Base** to zoom into your rally area for easier selection and **Map** to see the full battlefield.
-- Keyboard shortcuts: `1` Gather, `2` Attack, `R` Retreat, `3` rifle infantry, `4` rocket trooper, `5` tank, `6` ore collector, `7` demolition truck, `Enter` send selected, `Esc` clear selection.
+- Keyboard shortcuts: `1` Gather, `2` Attack, `R` Retreat, `3` rifle infantry, `4` rocket trooper, `5` tank, `6` ore collector, `7` demolition truck, `Enter` send selected, `Esc` clear selection, `M` mute.
+- **Sound** starts with your first click or key press. Weapons, explosions and collectors are heard from where they are on screen; fighting outside the view (for example the enemy base while you are in **Base** view) is quieter and muffled. Orders are beaten on a drum, and an order that cannot be carried out, such as a unit you cannot afford, gets a dull double knock. A siren and **BASE UNDER ATTACK** warn you when one of your buildings is hit, at most once every 15 seconds. The speaker button next to the speed button, or `M`, mutes and unmutes everything; the choice is remembered. A paused match is silent.
 - **Gather** keeps newly produced troops in front of your base. Select gathered units individually or as a group and send only those troops north.
 - **Attack** sends all gathered troops north and automatically sends newly produced troops into battle. Use **Retreat** to recall attacking troops.
 - **Retreat** recalls deployed troops to the base rally area and keeps all newly completed units inside their barracks or factory. Recalled troops defend locally once they reach the rally area; active collectors keep mining. Choose **Gather** to release sheltered troops to the rally area, or **Attack** to release them into battle. Sheltered collectors resume mining in either mode. Units inside a building are lost if it is destroyed.
@@ -209,6 +210,35 @@ Truck strikes (`--trucks`) destroyed between 3 fewer and 28 more credits net.
 Of the line defenses, a truck holding against the armored wave did worse (net
 −1702 to −2472); the others moved by less than 140 credits either way. The
 tables in the other sections were measured before this change.
+
+## Sound
+
+`web/audio.js` synthesizes every sound with the Web Audio API when it plays,
+so the game has no audio files. Sound is derived from what the renderer and
+HUD already show and never affects a match.
+
+Weapons and explosions are bursts of filtered noise with no pitched sweeps.
+The heavy ones are overdriven, and all of them ring out through a generated
+echo of open country: a few reflections, then a tail that darkens as it rolls
+away. Orders are field drums, the match result is a bugle call, the alarm is
+a siren, and the controls are switches and struck metal.
+
+- Battlefield sounds are triggered where the effects are drawn
+  (`web/combat-effects.js` and `web/renderer.js`): a weapon when it fires, a
+  shell when its projectile lands, and a wreck, collapse or demolition blast
+  with its explosion. `BattlefieldRenderer.hear` pans each one across the view
+  and marks it as far away once it lies outside it. A far sound is quieter and
+  duller, and more of it is echo.
+- Interface sounds are triggered in `web/main.js`: order acknowledgements,
+  production, the status-line announcements, and the match result.
+- Wind, and diesel engines and track clatter that follow how many vehicles
+  are moving, loop underneath for as long as a match runs.
+
+Each sound in the `SOUNDS` table has a level, a minimum gap between two of its
+kind, and a tail length. A sound arriving inside the gap is delayed a little,
+so a volley is heard as ripple fire, or dropped if the wait would be too long.
+At most 24 battlefield sounds play at once; explosions are exempt. A limiter
+on the output keeps a large battle from clipping.
 
 ## Local match debug exports
 
