@@ -191,9 +191,12 @@ The renderer draws damage in two modules:
   target). The surface around a wound chars, bends inward and sags; smoke and
   fire rise from the newest wounds. A model's meshes and materials are
   untouched until its first wound.
-- `web/terrain-damage.js` keeps burn marks and craters in two instanced draws
-  with fixed budgets. Repeated hits darken the mark that is already there, and
-  the oldest scar makes room once a budget is full.
+- `web/terrain-damage.js` keeps terrain-conforming burn marks, compound
+  craters, and ballistic ejecta clods in instanced draws with fixed budgets.
+  Marks drape across soil, asphalt, and concrete aprons, glow with cooling
+  embers, merge or excavate under sustained shelling, comb grass and blast-tilt
+  or strip nearby trees radially, and give driving vehicles crater pitch, roll,
+  and soot-darkened dust. The oldest scar makes room once a budget is full.
 
 Measured with the benchmarks below, before and after the slowdown:
 
@@ -259,7 +262,7 @@ actual built WebAssembly module:
 
 ```sh
 ./scripts/build-web.sh
-node --test scripts/test-debug-export.mjs
+node --test scripts/test-debug-export.mjs scripts/test-terrain-damage.mjs
 # Verify an unchanged build against an export, or test a counter-strategy change.
 node scripts/replay-debug.mjs path/to/debug.json --verify
 node scripts/replay-debug.mjs path/to/debug.json --expect-ai-win

@@ -150,14 +150,15 @@ export class CombatEffects {
     // building, only the occasional round that falls short does.
     let scar = null;
     if (heavy && shot.target_is_unit) {
-      scar = { x: end.x + random(-.6, .6), z: end.z + random(-.6, .6) };
+      scar = { x: end.x + random(-.55, .55), z: end.z + random(-.55, .55), dx: direction.x, dz: direction.z };
     } else if (heavy && Math.random() < .35) {
       const short = random(4.5, 6.5);
-      scar = { x: end.x - direction.x * short + random(-1.5, 1.5), z: end.z - direction.z * short + random(-1.5, 1.5) };
+      scar = { x: end.x - direction.x * short + random(-1.5, 1.5), z: end.z - direction.z * short + random(-1.5, 1.5), dx: direction.x, dz: direction.z };
     }
     // Guns fire the heaviest shell, then tanks, then rocket troopers.
     if (scar) scar.radius = !shot.source_is_unit ? 1.7 : shot.kind === 'tank' ? 1.1 : .85;
     this.projectiles.push({ mesh, start, end, age: 0, trail: 0, kind: shot.kind, scar,
+      fromUnit: shot.source_is_unit,
       loudness: !shot.source_is_unit ? 1.3 : shot.kind === 'tank' ? 1 : .8,
       duration: heavy ? Math.max(.1, start.distanceTo(end) / (shot.kind === 'tank' ? 65 : 36)) : .085 });
   }
@@ -182,9 +183,9 @@ export class CombatEffects {
         gravity: 16, color: 0xffe7a0 });
     }
     for (let i = 0; i < 8; i++) this.smokePuff({ ...origin, y: 2 + i * .6 }, random(3, 5));
-    this.ground.scorch(blast.x, blast.z, blast.radius * .9, .5);
-    this.ground.crater(blast.x, blast.z, 2.3);
-    this.ground.blast(blast.x, blast.z, blast.radius + 2.5);
+    this.ground.crater(blast.x, blast.z, 2.4, { heat: 1 });
+    this.ground.scorch(blast.x, blast.z, blast.radius * .95, .65, { heat: 1 });
+    this.ground.blast(blast.x, blast.z, blast.radius + 4.5, 1);
     const mesh = new THREE.Mesh(new THREE.RingGeometry(.85, 1, 48),
       new THREE.MeshBasicMaterial({ color: 0xffbc50, transparent: true, opacity: .8,
         side: THREE.DoubleSide, depthWrite: false }));
@@ -227,11 +228,8 @@ export class CombatEffects {
     if (entity.kind !== 'demolition') {
       this.ground.scorch(position.x, position.z, heavy ? scale * 2.2 : 1, heavy ? .6 : .4);
       if (vehicle) this.ground.crater(position.x, position.z, .95);
-      else if (heavy) {
-        for (let i = 0; i < 3; i++) {
-          this.ground.crater(position.x + random(-1, 1) * scale, position.z + random(-1, 1) * scale, random(.7, 1.2));
-        }
-      }
+      else if (heavy) this.ground.crater(position.x, position.z, 1.35);
+      this.ground.blast(position.x, position.z, !entity.isUnit ? 7.5 : 4.2, !entity.isUnit ? .75 : .45);
     }
     const debris = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), material, heavy ? 12 : 3);
     debris.frustumCulled = false; this.scene.add(debris);
@@ -285,7 +283,9 @@ export class CombatEffects {
       if (t < 1) return true;
       this.burst(p.end, p.kind === 'soldier' ? .18 : .55, p.kind !== 'soldier');
       if (p.kind !== 'soldier') this.sound('impact', p.end.x, p.end.z, { size: p.loudness });
-      if (p.scar) this.ground.scorch(p.scar.x, p.scar.z, p.scar.radius, .36);
+      if (p.scar) {
+        this.ground.scorch(p.scar.x, p.scar.z, p.scar.radius, !p.fromUnit ? .52 : .4, { dx: p.scar.dx, dz: p.scar.dz, heat: .85 });
+      }
       this.removeProjectile(p); return false;
     });
     this.remains = this.remains.filter(r => {
@@ -318,9 +318,11 @@ export class CombatEffects {
         r.emission = 0;
         const size = r.scale * Math.min(1, (6 - r.age) / 2);
         this.burn(r.position, size);
+        this.ground.scorch(r.position.x, r.position.z, r.scale * 1.5, .12, { heat: .6, passive: true });
       }
       return true;
     });
+    this.ground.update(dt, (type, pos, opts) => this.emit(type, pos, opts));
     for (const batch of [this.smoke, this.glow]) {
       batch.particles = batch.particles.filter(p => {
         p.age += dt;

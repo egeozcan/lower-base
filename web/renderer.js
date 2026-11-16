@@ -3,6 +3,7 @@ import { CombatEffects } from './combat-effects.js';
 import { ProductionQueues } from './production-queues.js';
 import { CollectorCargo, POUR_START } from './collector-cargo.js';
 import { ModelDamage, condition, sootVariant } from './damage.js';
+import { GROUND_Y, ROAD_Y, APRON_Y } from './terrain-damage.js';
 
 // The battlefield is deliberately made from simple, lit geometry so it remains
 // readable when dozens of units are moving at once.
@@ -160,8 +161,8 @@ function scatter(scene, geometry, material, count, place, castShadow = false) {
 function addEnvironment(scene, compact) {
   // A sunlit temperate battlefield: scrub, worn asphalt and concrete aprons.
   box(scene, 100, .6, 150, 0, -.5, 0, mat(0x5a6236));
-  texturedPlane(scene, 100, 150, 0, -.195, 0, groundTexture(compact ? 6 : 10));
-  texturedPlane(scene, 9, 110, 0, -.055, 0, asphaltTexture(), .9);
+  texturedPlane(scene, 100, 150, 0, GROUND_Y, 0, groundTexture(compact ? 6 : 10));
+  texturedPlane(scene, 9, 110, 0, ROAD_Y, 0, asphaltTexture(), .9);
   for (let z = -50; z <= 50; z += 5) {
     box(scene, .15, .025, 2, 0, -.04, z, mat(0xc6b785));
     for (const x of [-4.2, 4.2]) box(scene, .12, .025, 4.8, x, -.04, z, mat(0xaaa68b));
@@ -169,7 +170,7 @@ function addEnvironment(scene, compact) {
   const apron = apronTexture(compact ? 12 : 20);
   for (const side of [-1, 1]) {
     box(scene, 37, .15, 19, 0, -.04, side * 42, mat(0x7c7b6c));
-    const slab = texturedPlane(scene, 37, 19, 0, .036, side * 42, apron);
+    const slab = texturedPlane(scene, 37, 19, 0, APRON_Y, side * 42, apron);
     if (side < 0) slab.rotation.z = Math.PI;
     for (let x = -18; x <= 18; x += 3) box(scene, 1.5, .03, .45, x, .05, side * 32.8, mat(0xcbb457), -.45);
   }
@@ -188,9 +189,10 @@ function addEnvironment(scene, compact) {
     return true;
   };
   const foliage = new THREE.MeshStandardMaterial({color: 0xffffff, roughness: .9, flatShading: true});
-  scatter(scene, new THREE.CylinderGeometry(.18, .3, 1.6, 5), mat(0x554631), trees.length, (transform, color, i) => {
+  const trunkMat = new THREE.MeshStandardMaterial({color: 0xffffff, roughness: .92, flatShading: true});
+  const trunks = scatter(scene, new THREE.CylinderGeometry(.18, .3, 1.6, 5), trunkMat, trees.length, (transform, color, i) => {
     const t = trees[i];
-    color.set(0xffffff); transform.position.set(t.x, .6 * t.s, t.z); transform.scale.setScalar(t.s); return true;
+    color.setHSL(.08, .32, .24 + t.h * .05); transform.position.set(t.x, .6 * t.s, t.z); transform.scale.setScalar(t.s); return true;
   }, true);
   const canopies = [
     scatter(scene, new THREE.ConeGeometry(1.75, 3.7, 7), foliage, trees.length, treeAt(2.7, .1), true),
@@ -222,7 +224,7 @@ function addEnvironment(scene, compact) {
     }
   }
   // The plants that battle damage can burn, in instance order.
-  return { grass: { meshes: [grass], spots: tufts }, trees: { meshes: canopies, spots: trees } };
+  return { grass: { meshes: [grass], spots: tufts }, trees: { trunks, meshes: canopies, spots: trees } };
 }
 const FOOTPRINTS = {command: [9.4, 8.6], refinery: [9.2, 7.6], factory: [8.4, 8], barracks: [7.6, 7.2], emplacement: [4.6, 4.6]};
 // An empty Standard site: corner brackets around the structure's footprint.
@@ -603,6 +605,7 @@ const turnToward = (current, target, step) => current + Math.max(-step, Math.min
 // gait: infantry bob and sway, vehicles ride their suspension and raise dust.
 // Damage shows in how they move: wounded infantry stoop and limp, and
 // battered vehicles list to one side and shudder.
+const DUST_BASE = new THREE.Color(0xa1977a), DUST_SOOT = new THREE.Color(0x3e3830), dustColor = new THREE.Color();
 function animateUnit(entity, item, dt, now, effects, compact, state) {
   const model = entity.group.children[0], turret = model.userData.turret;
   const dx = item.x - entity.group.position.x, dz = item.z - entity.group.position.z;
@@ -626,16 +629,18 @@ function animateUnit(entity, item, dt, now, effects, compact, state) {
   const hurt = entity.hurt;
   if (vehicle) {
     const list = entity.list * hurt, shudder = state === 2 ? Math.sin(now * .05 + entity.list * 90) * .012 : 0;
-    model.position.y = Math.sin(entity.gait * 2.3) * .035 * amount + Math.abs(list) * 1.1 + shudder;
-    model.rotation.x = Math.sin(entity.gait * 1.7) * .015 * amount + shudder;
-    model.rotation.z = list;
+    const terrain = effects.ground.sample(item.x, item.z, model.rotation.y);
+    model.position.y = Math.sin(entity.gait * 2.3) * .035 * amount + Math.abs(list) * 1.1 + shudder + terrain.y;
+    model.rotation.x = Math.sin(entity.gait * 1.7) * .015 * amount + shudder + terrain.pitch;
+    model.rotation.z = list + terrain.roll;
     entity.dust += dt * amount;
     if (entity.dust > (compact ? .2 : .1) && entity.group.visible) {
       entity.dust = 0;
       const back = item.kind === 'tank' ? 1.5 : 1.9, yaw = model.rotation.y;
+      const tint = terrain.soot > 0 ? dustColor.copy(DUST_BASE).lerp(DUST_SOOT, terrain.soot * .85).getHex() : 0xa1977a;
       effects.emit('dust', { x: item.x + Math.sin(yaw) * back, y: .25, z: item.z + Math.cos(yaw) * back },
-        { size: .8 + Math.random() * .5, life: .7 + Math.random() * .4, vx: (Math.random() - .5) * .6,
-          vy: .35, vz: (Math.random() - .5) * .6, color: 0xa1977a });
+        { size: (.8 + Math.random() * .5) * (1 + terrain.soot * .35), life: .7 + Math.random() * .4, vx: (Math.random() - .5) * .6,
+          vy: .35, vz: (Math.random() - .5) * .6, color: tint });
     }
   } else {
     // The bad leg takes a short step and the body dips over it.
