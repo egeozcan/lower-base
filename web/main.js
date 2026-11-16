@@ -24,7 +24,8 @@ const specs = [
     kind: 'collector', short: 'ORE COLLECTOR', name: 'ORE COLLECTOR', cost: 200, key: '6',
   },
 ];
-let game, renderer, snapshot, lastTime = 0, ended = false, paused = false, demo = false;
+let game, renderer, snapshot, lastTime = 0, ended = false, paused = false, demo = false, showcase = null;
+window.__lowerBase = { get renderer() { return renderer; }, get game() { return game; } };
 const audio = new GameAudio();
 // Browsers start audio only from a user gesture, so every gesture offers one.
 for (const type of ['pointerdown', 'pointerup', 'keydown', 'click']) {
@@ -147,6 +148,7 @@ function abortMatch() {
   debugActions?.reset();
   game?.free();
   game = null;
+  showcase = null;
   snapshot = null;
   selected.clear();
   paused = false;
@@ -431,10 +433,128 @@ function refresh() {
     $('restart').focus();
   }
 }
+function beginDamageShowcase() {
+  game?.free();
+  game = null;
+  demo = true;
+  paused = false;
+  ended = false;
+  selected.clear();
+  $('main-menu').hidden = true;
+  $('app').hidden = false;
+  $('app').classList.add('demo-mode');
+  $('app').classList.remove('standard-mode');
+  $('pause-screen').hidden = true;
+  $('game-over').classList.add('hidden');
+  $('spectator-note').hidden = false;
+  $('match-label').textContent = 'DAMAGE SHOWCASE · CLOSE-UP';
+  if (!renderer) renderer = new BattlefieldRenderer($('scene'), onSelect, cancelTraining, ejectGarrisoned, audio);
+  renderer.reset();
+  renderer.setView('map');
+  renderer.zoom = .38;
+  renderer.resize();
+  const cols = [
+    { x: -12, fraction: 1.0 },
+    { x: -4, fraction: .70 },
+    { x: 4, fraction: .45 },
+    { x: 12, fraction: .20 },
+  ];
+  const unitRows = [
+    { kind: 'tank', max_hp: 280, z: -10.5 },
+    { kind: 'collector', max_hp: 220, z: -6.0 },
+    { kind: 'demolition', max_hp: 140, z: -1.5 },
+    { kind: 'soldier', max_hp: 100, z: 7.0 },
+    { kind: 'rocket', max_hp: 80, z: 10.6 },
+  ];
+  let nextId = 1;
+  const units = [], buildings = [], targets = [];
+  for (const row of unitRows) {
+    for (const col of cols) {
+      const id = nextId++;
+      const u = {
+        id, team: 'player', kind: row.kind, state: 'gather',
+        x: col.x - .18, z: row.z - .24, baseX: col.x, baseZ: row.z,
+        hp: row.max_hp, max_hp: row.max_hp, cargo: row.kind === 'collector' ? 65 : 0,
+        unload_progress: 0, targetFraction: col.fraction,
+      };
+      units.push(u);
+      if (col.fraction < 1) targets.push({ item: u, isUnit: true });
+    }
+  }
+  for (const col of cols) {
+    const id = nextId++;
+    const b = {
+      id, team: 'player', kind: 'emplacement',
+      x: col.x, z: 3.0, hp: 450, max_hp: 450,
+      construction_time: 0, construction_remaining: 0, facing: -.55,
+      targetFraction: col.fraction,
+    };
+    buildings.push(b);
+    if (col.fraction < 1) targets.push({ item: b, isUnit: false });
+  }
+  showcase = {
+    time: 0,
+    turned: false,
+    struck: false,
+    nextShotId: 1,
+    targets,
+    snapshot: {
+      time: 0,
+      outcome: 'playing',
+      mode: 'gather',
+      game_mode: 'deathmatch',
+      credits: 0,
+      barracks_queue: [],
+      factory_queue: [],
+      defense_slots: [],
+      sites: [],
+      ore: [],
+      buildings,
+      units,
+      shots: [],
+      explosions: [],
+    },
+  };
+  snapshot = showcase.snapshot;
+  renderer.update(showcase.snapshot, selected);
+}
+function stepShowcase(dt) {
+  showcase.time += dt;
+  const snap = showcase.snapshot;
+  snap.time = showcase.time;
+  snap.shots = [];
+  if (!showcase.turned && showcase.time >= .04) {
+    showcase.turned = true;
+    for (const u of snap.units) { u.x = u.baseX; u.z = u.baseZ; }
+  }
+  if (!showcase.struck && showcase.time >= .25) {
+    showcase.struck = true;
+    for (const { item, isUnit } of showcase.targets) {
+      item.hp = item.max_hp * item.targetFraction;
+      snap.shots.push({
+        id: showcase.nextShotId++,
+        source_id: 999,
+        source_is_unit: true,
+        target_id: item.id,
+        target_is_unit: isUnit,
+        kind: 'tank',
+        x: item.x - 10,
+        source_y: 1.5,
+        z: item.z + 8,
+        target_x: item.x,
+        target_y: 1.2,
+        target_z: item.z,
+      });
+    }
+  }
+  renderer.update(snap, selected);
+}
 function frame(now) {
   if (!lastTime) lastTime = now;
   const dt = Math.min((now - lastTime) / 1000, .1); lastTime = now;
-  if (game && !paused) {
+  if (showcase) {
+    stepShowcase(dt * SPEEDS[speedIndex]);
+  } else if (game && !paused) {
     if (!ended) {
       // The simulation clamps one update to 0.25s, so feed scaled time in 0.1s chunks.
       for (let remaining = dt * SPEEDS[speedIndex]; remaining > 1e-4;) {
@@ -518,6 +638,7 @@ async function start() {
     $('start-game').disabled = false;
     $('start-demo').disabled = false;
     $('menu-status').textContent = 'READY FOR COMMAND';
+    if (new URLSearchParams(location.search).get('showcase') === 'damage') beginDamageShowcase();
     requestAnimationFrame(frame);
   } catch (error) {
     console.error(error);

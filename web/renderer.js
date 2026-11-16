@@ -12,9 +12,9 @@ const C = {
   metal: 0x263743, dark: 0x111e27, light: 0x829ba2, ground: 0x172a32,
 };
 const mats = new Map();
-function mat(color, emissive = 0, intensity = 0) {
-  const key = `${color}:${emissive}:${intensity}`;
-  if (!mats.has(key)) mats.set(key, new THREE.MeshStandardMaterial({ color, roughness: 0.88, metalness: 0.12, emissive, emissiveIntensity: intensity }));
+function mat(color, emissive = 0, intensity = 0, roughness = 0.88, metalness = 0.12) {
+  const key = `${color}:${emissive}:${intensity}:${roughness}:${metalness}`;
+  if (!mats.has(key)) mats.set(key, new THREE.MeshStandardMaterial({ color, roughness, metalness, emissive, emissiveIntensity: intensity }));
   return mats.get(key);
 }
 // Damaged models swap each material for one shared variant that shows soot.
@@ -240,8 +240,85 @@ function siteMarker(site) {
   marker.position.set(site.x, .04, site.z);
   return marker;
 }
-function buildingMesh(b) {
+function createBreakableTracker() {
+  const breakable = [];
+  let current = null;
+  const part = (id, fn, meta = {}) => {
+    const entry = {
+      id, spans: [], state: 0, color: null, parent: null,
+      shape: meta.shape || 'plate', protruding: !!meta.protruding,
+      minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, minZ: Infinity, maxZ: -Infinity,
+    };
+    current = entry;
+    fn();
+    current = null;
+    breakable.push(entry);
+    return entry;
+  };
+  const tag = (geometry, material) => {
+    if (!current) return;
+    geometry.userData.part = current;
+    if (current.color === null && material?.color) current.color = material.color.getHex();
+  };
+  const attach = (id, mesh, meta = {}) => {
+    const entry = part(id, () => {}, meta);
+    mesh.userData.part = entry;
+    if (mesh.material?.color) entry.color = mesh.material.color.getHex();
+    return entry;
+  };
+  const mergeGroup = (source, parent) => {
+    for (const [material, geometries] of source) {
+      const positions = [], normals = [], spans = [];
+      for (const geometry of geometries) {
+        const pos = geometry.attributes.position.array;
+        const start = positions.length / 3, count = pos.length / 3;
+        positions.push(...pos);
+        normals.push(...geometry.attributes.normal.array);
+        const owner = geometry.userData.part;
+        if (owner) {
+          for (let i = 0; i < pos.length; i += 3) {
+            owner.minX = Math.min(owner.minX, pos[i]); owner.maxX = Math.max(owner.maxX, pos[i]);
+            owner.minY = Math.min(owner.minY, pos[i + 1]); owner.maxY = Math.max(owner.maxY, pos[i + 1]);
+            owner.minZ = Math.min(owner.minZ, pos[i + 2]); owner.maxZ = Math.max(owner.maxZ, pos[i + 2]);
+          }
+          spans.push({ owner, start, count });
+        }
+        geometry.dispose();
+      }
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+      geometry.computeBoundingSphere();
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.castShadow = true; mesh.receiveShadow = true; parent.add(mesh);
+      for (const { owner, start, count } of spans) {
+        owner.spans.push({ mesh, start, count });
+        owner.parent = parent;
+      }
+    }
+  };
+  const finish = target => {
+    target.userData.breakable = breakable.filter(entry => {
+      if (!entry.spans.length) return false;
+      entry.at = new THREE.Vector3(
+        (entry.minX + entry.maxX) / 2,
+        (entry.minY + entry.maxY) / 2,
+        (entry.minZ + entry.maxZ) / 2,
+      );
+      entry.size = new THREE.Vector3(
+        Math.max(.12, entry.maxX - entry.minX),
+        Math.max(.1, entry.maxY - entry.minY),
+        Math.max(.12, entry.maxZ - entry.minZ),
+      );
+      return true;
+    });
+  };
+  return { part, tag, attach, mergeGroup, finish };
+}
+
+export function buildingMesh(b) {
   const g = new THREE.Group();
+  const tracker = createBreakableTracker();
   // Orient the entrance toward the battlefield for each side. Each facility
   // has a distinctive roofline, so its role reads even from the full map.
   const body = new THREE.Group();
@@ -256,10 +333,10 @@ function buildingMesh(b) {
     cylinder(body, 1.7, 1.7, .3, 0, .2, 0, shadow, 12);
     cylinder(body, .8, 1.15, .65, 0, .65, 0, dark, 12);
     box(body, 2.5, 1.25, .45, 0, 1.35, -.4, armor);
-    box(body, 2.55, .18, .5, 0, 2, -.4, glow);
+    tracker.attach('shield-trim', box(body, 2.55, .18, .5, 0, 2, -.4, glow));
     box(body, .34, .34, 3.5, 0, 1.8, -1.4, steel);
-    box(body, .55, .5, .7, 0, 1.8, -3.1, dark);
-    for (const x of [-.8, .8]) box(body, .3, .25, 2.1, x, .5, .7, edge, x * .3);
+    tracker.attach('muzzle', box(body, .55, .5, .7, 0, 1.8, -3.1, dark), { shape: 'rod', protruding: true });
+    for (const x of [-.8, .8]) tracker.attach(x < 0 ? 'strut-l' : 'strut-r', box(body, .3, .25, 2.1, x, .5, .7, edge, x * .3), { shape: 'rod' });
   } else if (b.kind === 'command') {
     // A stepped headquarters with a raised reactor and communications crown.
     box(body, 7.3, .52, 6.6, 0, .28, 0, dark);
@@ -360,32 +437,23 @@ function buildingMesh(b) {
     mesh.updateMatrix();
     const geometry = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
     geometry.applyMatrix4(mesh.matrix);
+    if (mesh.userData.part) geometry.userData.part = mesh.userData.part;
     if (!parts.has(mesh.material)) parts.set(mesh.material, []);
     parts.get(mesh.material).push(geometry);
     mesh.geometry.dispose();
     body.remove(mesh);
   }
-  for (const [material, geometries] of parts) {
-    const positions = [], normals = [];
-    for (const geometry of geometries) {
-      positions.push(...geometry.attributes.position.array);
-      normals.push(...geometry.attributes.normal.array);
-      geometry.dispose();
-    }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
-    geometry.computeBoundingSphere();
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.castShadow = true; mesh.receiveShadow = true; body.add(mesh);
-  }
+  tracker.mergeGroup(parts, body);
+  tracker.finish(g);
   const footprint = FOOTPRINTS[b.kind] || FOOTPRINTS.barracks;
   g.add(contactShadow(...footprint));
   const baseRing = ring(b.kind === 'command' ? 4.3 : 3.5, accent, .3); baseRing.userData.decoration = true; g.add(baseRing);
   return g;
 }
-function unitMesh(u) {
+export function unitMesh(u) {
   const g = new THREE.Group();
+  const tracker = createBreakableTracker();
+  const part = tracker.part;
   const accent = u.team === 'player' ? C.player : C.enemy;
   const darkAccent = u.team === 'player' ? C.playerDark : C.enemyDark;
   const glow = mat(accent, accent, .25), armor = mat(u.team === 'player' ? 0x8b9563 : 0xa09166), dark = mat(0x464c36);
@@ -403,6 +471,7 @@ function unitMesh(u) {
     source.applyMatrix4(new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(rx, ry, rz)));
     source.translate(x, parts === hopper ? y - 1.36 : y,
       parts === turret ? z - pivotZ : parts === hopper ? z - 1.88 : z);
+    tracker.tag(source, material);
     if (!parts.has(material)) parts.set(material, []);
     parts.get(material).push(source);
   };
@@ -428,48 +497,64 @@ function unitMesh(u) {
     track(1.22, 4.2, .45, .82, .62, .26);
     plate(1.95, .62, 3.9, 0, 1.0, 0, hullDark);
     plate(2.9, .14, .85, 0, .42, -2.3, hazard, -.45);
-    for (let x = -1.25; x <= 1.26; x += .36) plate(.12, .1, .3, x, .26, -2.72, metal, -.45);
+    const leftTeeth = [], midTeeth = [], rightTeeth = [];
+    for (let x = -1.25; x <= 1.26; x += .36) (x < -.3 ? leftTeeth : x > .3 ? rightTeeth : midTeeth).push(x);
+    part('scoop-l', () => { for (const x of leftTeeth) plate(.12, .1, .3, x, .26, -2.72, metal, -.45); }, { protruding: true });
+    for (const x of midTeeth) plate(.12, .1, .3, x, .26, -2.72, metal, -.45);
+    part('scoop-r', () => { for (const x of rightTeeth) plate(.12, .1, .3, x, .26, -2.72, metal, -.45); }, { protruding: true });
     plate(2.3, .5, .55, 0, 1.0, -1.95, shadow);
     drum(.24, .24, 2.1, 0, .9, -2.05, metal, 0, 0, Math.PI / 2, 10);
     // Cab on the left, machinery on the right.
     plate(.95, .85, 1.05, -.52, 1.72, -1.2, glow);
     plate(.85, .3, .06, -.52, 1.88, -1.74, glass);
     plate(.06, .3, .7, -1.0, 1.88, -1.2, glass);
-    plate(1.05, .12, 1.15, -.52, 2.2, -1.2, hullMat);
-    plate(.85, .55, .95, .5, 1.58, -1.25, hullMat);
-    for (const z of [-1.55, -1.25, -.95]) plate(.7, .06, .12, .5, 1.87, z, shadow);
-    drum(.09, .11, .9, .78, 2.1, -.95, shadow);
-    drum(.12, .12, .08, .78, 2.56, -.95, rust);
+    part('cab-roof', () => plate(1.05, .12, 1.15, -.52, 2.2, -1.2, hullMat));
+    part('engine-hood', () => {
+      plate(.85, .55, .95, .5, 1.58, -1.25, hullMat);
+      for (const z of [-1.55, -1.25, -.95]) plate(.7, .06, .12, .5, 1.87, z, shadow);
+    });
+    part('exhaust', () => {
+      drum(.09, .11, .9, .78, 2.1, -.95, shadow);
+      drum(.12, .12, .08, .78, 2.56, -.95, rust);
+    }, { shape: 'rod', protruding: true });
     // Hopper: flared walls with a faction stripe along the rim.
     parts = hopper;
     plate(1.7, .1, 2.2, 0, 1.36, .75, shadow);
     for (const x of [-1, 1]) {
       plate(.12, .95, 2.3, x * .93, 1.8, .75, hullMat, 0, 0, x * .16);
-      plate(.14, .16, 2.34, x * 1.0, 2.26, .75, glow);
-      for (const z of [.05, .75, 1.45]) plate(.06, .8, .1, x * 1.0, 1.78, z, hullDark, 0, 0, x * .16);
+      part(x < 0 ? 'hopper-trim-l' : 'hopper-trim-r', () => {
+        plate(.14, .16, 2.34, x * 1.0, 2.26, .75, glow);
+        for (const z of [.05, .75, 1.45]) plate(.06, .8, .1, x * 1.0, 1.78, z, hullDark, 0, 0, x * .16);
+      });
     }
     plate(2, .95, .12, 0, 1.8, 1.88, hullMat);
     plate(2.1, .16, .14, 0, 2.26, 1.9, glow);
     plate(2, .95, .12, 0, 1.8, -.38, hullMat);
     parts = hull;
-    for (const x of [-.6, .6]) plate(.36, .14, .5, x, 1.4, 1.98, stripe);
-    for (const x of [-.85, -.3]) plate(.18, .14, .08, x, 1.45, -1.75, lamp);
+    for (const x of [-.6, .6]) part(x < 0 ? 'bumper-l' : 'bumper-r', () => plate(.36, .14, .5, x, 1.4, 1.98, stripe));
+    for (const x of [-.85, -.3]) part(x < -.5 ? 'lamp-l' : 'lamp-r', () => plate(.18, .14, .08, x, 1.45, -1.75, lamp), { protruding: true });
   } else if (u.kind === 'demolition') {
     // Cab-over truck hauling one oversized, unmistakably dangerous drum.
     plate(2, .32, 3.9, 0, .7, .05, shadow);
     for (const x of [-1.04, 1.04]) for (const z of [-1.3, .55, 1.4]) {
-      drum(.5, .5, .36, x, .5, z, shadow, 0, 0, Math.PI / 2, 12);
-      drum(.24, .24, .38, x, .5, z, metal, 0, 0, Math.PI / 2);
+      const addWheel = () => {
+        drum(.5, .5, .36, x, .5, z, shadow, 0, 0, Math.PI / 2, 12);
+        drum(.24, .24, .38, x, .5, z, metal, 0, 0, Math.PI / 2);
+      };
+      if (z === .55) part(x < 0 ? 'wheel-ml' : 'wheel-mr', addWheel, { shape: 'wheel' });
+      else addWheel();
     }
     plate(2.1, .22, 1.2, 0, .95, -1.3, hullDark);
     plate(1.9, 1.15, 1.05, 0, 1.6, -1.35, glow);
     plate(1.65, .45, .08, 0, 1.85, -1.9, glass, .15);
-    plate(1.95, .14, 1.1, 0, 2.22, -1.35, hullMat);
-    plate(1.4, .3, .06, 0, 1.25, -1.9, metal);
-    for (let x = -.55; x <= .56; x += .18) plate(.06, .26, .07, x, 1.25, -1.93, shadow);
-    plate(2.1, .2, .16, 0, .88, -1.98, metal);
-    for (const x of [-.72, .72]) plate(.24, .18, .08, x, 1.23, -1.92, lamp);
-    drum(.14, .14, .18, 0, 2.38, -1.35, mat(0xff6b28, 0xff4a10, 1.4));
+    part('cab-roof', () => plate(1.95, .14, 1.1, 0, 2.22, -1.35, hullMat));
+    part('grille', () => {
+      plate(1.4, .3, .06, 0, 1.25, -1.9, metal);
+      for (let x = -.55; x <= .56; x += .18) plate(.06, .26, .07, x, 1.25, -1.93, shadow);
+    });
+    part('bumper', () => plate(2.1, .2, .16, 0, .88, -1.98, metal));
+    for (const x of [-.72, .72]) part(x < 0 ? 'lamp-l' : 'lamp-r', () => plate(.24, .18, .08, x, 1.23, -1.92, lamp), { protruding: true });
+    part('beacon', () => drum(.14, .14, .18, 0, 2.38, -1.35, mat(0xff6b28, 0xff4a10, 1.4)), { protruding: true });
     // Flatbed, cradle and the drum itself.
     plate(2, .14, 2.5, 0, .95, .62, hullMat);
     for (const z of [-.25, .62, 1.5]) plate(1.5, .5, .2, 0, 1.2, z, hullDark);
@@ -478,11 +563,13 @@ function unitMesh(u) {
     drum(.7, .7, .06, 0, 1.92, 1.79, metal, Math.PI / 2, 0, 0, 14);
     drum(.12, .12, .04, 0, 1.92, 1.83, rust, Math.PI / 2, 0, 0, 10);
     // Radiation trefoil on the rear cap.
-    for (let i = 0; i < 3; i++) {
-      const a = i * Math.PI * 2 / 3 + Math.PI / 2;
-      plate(.24, .38, .04, Math.cos(a) * .34, 1.92 + Math.sin(a) * .32, 1.83, rust, 0, 0, a);
-    }
-    drum(.08, .08, .5, .5, 2.6, .62, metal, 0, 0, 0, 6);
+    part('trefoil', () => {
+      for (let i = 0; i < 3; i++) {
+        const a = i * Math.PI * 2 / 3 + Math.PI / 2;
+        plate(.24, .38, .04, Math.cos(a) * .34, 1.92 + Math.sin(a) * .32, 1.83, rust, 0, 0, a);
+      }
+    });
+    part('vent-pipe', () => drum(.08, .08, .5, .5, 2.6, .62, metal, 0, 0, 0, 6), { shape: 'rod', protruding: true });
   } else if (u.kind === 'tank') {
     // Wedge-nosed heavy tank with team skirts and a twin-gun hexagonal turret.
     track(-1.1, 3.4, .42, .72, .6, .2);
@@ -491,26 +578,32 @@ function unitMesh(u) {
     plate(1.95, .14, 1.05, 0, 1.0, -1.32, hullMat, -.42);
     plate(1.6, .3, .3, 0, .62, -1.72, hullDark);
     for (const x of [-1, 1]) {
-      plate(.1, .36, 2.9, x * 1.43, .72, .05, glow);
-      plate(.12, .07, 2.9, x * 1.44, .93, .05, stripe);
+      for (const [tag, z] of [['f', -.675], ['r', .775]]) {
+        part(`skirt-${x < 0 ? 'l' : 'r'}${tag}`, () => {
+          plate(.1, .36, 1.45, x * 1.43, .72, z, glow);
+          plate(.12, .07, 1.45, x * 1.44, .93, z, stripe);
+        });
+      }
     }
     plate(1.5, .1, .8, 0, 1.24, 1.05, shadow);
     for (let x = -.6; x <= .61; x += .2) plate(.07, .07, .72, x, 1.3, 1.05, metal);
-    for (const x of [-.7, .7]) drum(.1, .12, .35, x, 1.35, 1.45, shadow, .3);
-    for (const x of [-.72, .72]) plate(.22, .14, .08, x, 1.0, -1.82, lamp);
+    for (const x of [-.7, .7]) part(x < 0 ? 'exhaust-l' : 'exhaust-r', () => drum(.1, .12, .35, x, 1.35, 1.45, shadow, .3), { shape: 'rod', protruding: true });
+    for (const x of [-.72, .72]) part(x < 0 ? 'lamp-l' : 'lamp-r', () => plate(.22, .14, .08, x, 1.0, -1.82, lamp), { protruding: true });
     parts = turret;
     drum(.95, 1.1, .5, 0, 1.48, 0, hullMat, 0, Math.PI / 6, 0, 6);
     drum(1.12, 1.12, .12, 0, 1.3, 0, glow, 0, Math.PI / 6, 0, 6);
     drum(.82, .95, .12, 0, 1.79, 0, glow, 0, Math.PI / 6, 0, 6);
-    plate(1.2, .42, .55, 0, 1.45, .95, hullMat);
+    part('bustle', () => plate(1.2, .42, .55, 0, 1.45, .95, hullMat));
     plate(1, .5, .42, 0, 1.5, -1.0, hullDark);
     for (const x of [-.24, .24]) {
       drum(.1, .12, 2.1, x, 1.52, -2.1, metal, Math.PI / 2);
-      plate(.24, .22, .34, x, 1.52, -3.12, shadow);
+      part(x < 0 ? 'muzzle-l' : 'muzzle-r', () => plate(.24, .22, .34, x, 1.52, -3.12, shadow), { shape: 'rod', protruding: true });
     }
-    drum(.25, .28, .22, .42, 1.95, .25, hullMat);
-    drum(.2, .2, .06, .42, 2.08, .25, shadow);
-    drum(.025, .025, 1.1, -.5, 2.35, .7, shadow);
+    part('cupola', () => {
+      drum(.25, .28, .22, .42, 1.95, .25, hullMat);
+      drum(.2, .2, .06, .42, 2.08, .25, shadow);
+    });
+    part('antenna', () => drum(.025, .025, 1.1, -.5, 2.35, .7, shadow), { shape: 'rod', protruding: true });
     if (player) for (const s of [-1, 1]) plate(.34, .03, .1, -.25 + s * .1, 1.86, -.25, stripe, 0, s * .7);
     else drum(.2, .2, .03, -.25, 1.86, -.25, stripe, 0, 0, 0, 5);
     parts = hull;
@@ -519,30 +612,30 @@ function unitMesh(u) {
     const suit = mat(player ? 0x5f6b72 : 0x6b5a4a);
     for (const x of [-.22, .22]) {
       plate(.34, .62, .38, x, .46, 0, suit);
-      plate(.36, .2, .2, x, .58, -.2, metal);
+      part(x < 0 ? 'kneepad-l' : 'kneepad-r', () => plate(.36, .2, .2, x, .58, -.2, metal));
       plate(.38, .22, .5, x, .12, -.06, shadow);
     }
     plate(.84, .74, .52, 0, 1.15, 0, suit);
     plate(.72, .42, .08, 0, 1.22, -.28, glow);
     plate(.88, .14, .56, 0, .8, 0, shadow);
     for (const x of [-.52, .52]) {
-      plate(.4, .24, .5, x, 1.5, 0, glow);
+      part(x < 0 ? 'shoulder-l' : 'shoulder-r', () => plate(.4, .24, .5, x, 1.5, 0, glow));
       plate(.26, .55, .3, x * 1.05, 1.1, -.05, suit);
       plate(.24, .2, .26, x * 1.05, .82, -.18, shadow);
     }
     plate(.48, .44, .48, 0, 1.78, 0, hullDark);
     plate(.4, .11, .06, 0, 1.78, -.26, mat(0xffa040, 0xff7a20, 1.6));
-    plate(.52, .1, .52, 0, 2.03, 0, glow);
+    part('helmet-crest', () => plate(.52, .1, .52, 0, 2.03, 0, glow));
     // Launcher pod on the right shoulder, warheads visible from the front.
     plate(.48, .42, 1.45, .66, 1.82, -.1, mat(0x55603c));
-    plate(.06, .12, 1.1, .92, 1.85, -.05, glow);
+    part('pod-trim', () => plate(.06, .12, 1.1, .92, 1.85, -.05, glow));
     drum(.1, .14, .25, .66, 1.82, .72, shadow, Math.PI / 2);
     for (const y of [1.72, 1.92]) {
       drum(.12, .12, .06, .55 + (y > 1.8 ? .22 : 0), y, -.9, shadow, Math.PI / 2);
       drum(.08, .08, .12, .55 + (y > 1.8 ? .22 : 0), y, -.9, mat(0xd8392a), Math.PI / 2);
       drum(.12, .12, .06, .77 - (y > 1.8 ? .22 : 0), y, -.9, shadow, Math.PI / 2);
     }
-    plate(.5, .5, .26, 0, 1.2, .36, dark);
+    part('backpack', () => plate(.5, .5, .26, 0, 1.2, .36, dark));
   } else {
     // Light rifleman: slim build, faction vest and helmet, rifle at the ready.
     for (const x of [-.17, .17]) {
@@ -553,42 +646,29 @@ function unitMesh(u) {
     plate(.66, .38, .44, 0, 1.16, 0, glow);
     plate(.64, .1, .42, 0, .8, 0, shadow);
     for (const x of [-.36, .36]) plate(.18, .5, .22, x, 1.06, -.12, armor, -.6);
-    plate(.42, .44, .22, 0, 1.12, .3, dark);
-    drum(.1, .12, .18, 0, 1.48, .3, metal);
+    part('backpack', () => plate(.42, .44, .22, 0, 1.12, .3, dark));
+    part('pack-roll', () => drum(.1, .12, .18, 0, 1.48, .3, metal), { shape: 'rod', protruding: true });
     drum(.19, .2, .28, 0, 1.58, -.02, pale);
-    drum(.26, .3, .2, 0, 1.78, 0, glow);
-    drum(.34, .34, .05, 0, 1.69, 0, glow);
+    part('helmet', () => {
+      drum(.26, .3, .2, 0, 1.78, 0, glow);
+      drum(.34, .34, .05, 0, 1.69, 0, glow);
+    }, { shape: 'helmet' });
     plate(.12, .14, .95, .22, 1.18, -.62, shadow);
     plate(.13, .12, .32, .22, 1.18, -.2, mat(0x6e4930));
     plate(.1, .2, .12, .22, 1.03, -.55, metal);
     drum(.04, .04, .45, .22, 1.2, -1.28, shadow, Math.PI / 2);
     plate(.2, .16, .16, .22, 1.2, -.85, pale);
   }
-  const merge = (source, parent) => {
-    for (const [material, geometries] of source) {
-      const positions = [], normals = [];
-      for (const geometry of geometries) {
-        positions.push(...geometry.attributes.position.array);
-        normals.push(...geometry.attributes.normal.array);
-        geometry.dispose();
-      }
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-      geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
-      geometry.computeBoundingSphere();
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.castShadow = true; mesh.receiveShadow = true; parent.add(mesh);
-    }
-  };
-  merge(hull, g);
+  tracker.mergeGroup(hull, g);
   if (hopper.size) {
     const pivot = new THREE.Group(); pivot.position.set(0, 1.36, 1.88);
-    merge(hopper, pivot); g.add(pivot); g.userData.hopper = pivot;
+    tracker.mergeGroup(hopper, pivot); g.add(pivot); g.userData.hopper = pivot;
   }
   if (turret.size) {
     const pivot = new THREE.Group(); pivot.position.z = pivotZ;
-    merge(turret, pivot); g.add(pivot); g.userData.turret = pivot;
+    tracker.mergeGroup(turret, pivot); g.add(pivot); g.userData.turret = pivot;
   }
+  tracker.finish(g);
   // Yaw last, so walking lean and suspension pitch follow the unit's heading.
   g.rotation.order = 'YXZ';
   const shadowSize = {collector: [3.6, 4.8], demolition: [3, 4.6], tank: [3.3, 4.2]}[u.kind] || [1.5, 1.3];
@@ -628,9 +708,11 @@ function animateUnit(entity, item, dt, now, effects, compact, state) {
   entity.hurt += (state / 2 - entity.hurt) * Math.min(1, dt * 3);
   const hurt = entity.hurt;
   if (vehicle) {
-    const list = entity.list * hurt, shudder = state === 2 ? Math.sin(now * .05 + entity.list * 90) * .012 : 0;
+    const list = entity.list * hurt;
+    const shudder = state === 2 ? (Math.sin(now * .055 + entity.list * 90) + .4 * Math.sin(now * .13)) * .012
+      : state === 1 ? Math.sin(now * .038 + entity.list * 90) * .004 : 0;
     const terrain = effects.ground.sample(item.x, item.z, model.rotation.y);
-    model.position.y = Math.sin(entity.gait * 2.3) * .035 * amount + Math.abs(list) * 1.1 + shudder + terrain.y;
+    model.position.y = Math.sin(entity.gait * 2.3) * .035 * amount + Math.abs(list) * .25 + shudder + terrain.y;
     model.rotation.x = Math.sin(entity.gait * 1.7) * .015 * amount + shudder + terrain.pitch;
     model.rotation.z = list + terrain.roll;
     entity.dust += dt * amount;
@@ -645,9 +727,10 @@ function animateUnit(entity, item, dt, now, effects, compact, state) {
   } else {
     // The bad leg takes a short step and the body dips over it.
     const stride = Math.sin(entity.gait), bad = Math.min(0, stride * Math.sign(entity.list));
-    model.position.y = Math.abs(stride) * .13 * amount * (bad ? 1 - .7 * hurt : 1);
-    model.rotation.z = (stride * .07 + bad * Math.sign(entity.list) * .22 * hurt) * amount;
-    model.rotation.x = -.1 * amount - .2 * hurt;
+    const breathe = Math.sin(now * .004 + entity.list * 40) * .02 * hurt;
+    model.position.y = Math.abs(stride) * .13 * amount * (bad ? 1 - .7 * hurt : 1) - .04 * hurt;
+    model.rotation.z = Math.sign(entity.list) * .1 * hurt + (stride * .07 + bad * Math.sign(entity.list) * .22 * hurt) * amount;
+    model.rotation.x = -.1 * amount - .2 * hurt + breathe;
   }
 }
 function healthBar(width) {
@@ -745,10 +828,17 @@ export class BattlefieldRenderer {
       }
       this.onSelect(id, touch || event.shiftKey, touch);
     });
+    this.zoom = 1;
+    this.renderer.domElement.addEventListener('wheel', event => {
+      event.preventDefault();
+      this.zoom = Math.max(.32, Math.min(1, this.zoom * Math.exp(event.deltaY * .0012)));
+      this.resize();
+    }, { passive: false });
     this.resizeObserver = new ResizeObserver(() => this.resize()); this.resizeObserver.observe(container); this.resize();
   }
   setView(view) {
     this.view = view === 'base' ? 'base' : 'map';
+    this.zoom = 1;
     this.resize();
   }
   // Where a spot on the field is heard from: panned across the view, and
@@ -762,7 +852,7 @@ export class BattlefieldRenderer {
     const w = Math.max(1, this.container.clientWidth), h = Math.max(1, this.container.clientHeight);
     this.renderer.setSize(w, h, false);
     const aspect = w / h;
-    const height = this.view === 'base' ? Math.max(38, 28 / aspect) : Math.max(88, 44 / aspect);
+    const height = (this.view === 'base' ? Math.max(38, 28 / aspect) : Math.max(88, 44 / aspect)) * (this.zoom || 1);
     const focusZ = this.view === 'base' ? 30 : 0;
     this.camera.position.set(0, 110, 95 + focusZ);
     this.camera.lookAt(0, 0, focusZ);
@@ -849,13 +939,25 @@ export class BattlefieldRenderer {
         const selection = ring(isUnit && ['tank', 'demolition'].includes(item.kind) ? 1.8 : 1.25, 0x9eff40, .95); selection.visible = false; group.add(selection);
         const hp = healthBar(isUnit ? 1.8 : 4.5); hp.position.y = isUnit ? (item.kind === 'tank' ? 2.3 : 2.5) : (item.kind === 'command' ? 6.8 : 5.1); group.add(hp);
         const profile = !isUnit ? (item.kind === 'emplacement' ? 'emplacement' : 'structure') : VEHICLES.has(item.kind) ? 'vehicle' : 'infantry';
-        const damage = new ModelDamage(group.children[0], profile, {soot: sooted, rubble: mat(0xffffff)});
+        const list = (Math.random() < .5 ? -1 : 1) * (.07 + Math.random() * .04);
+        const damage = new ModelDamage(group.children[0], profile, {
+          soot: sooted,
+          rubble: mat(0xffffff),
+          bandage: mat(0xe2dbc8, 0, 0, .96, 0),
+          blood: mat(0x961816, 0, 0, .96, 0),
+          strap: mat(0x251d17, 0, 0, .96, 0),
+          splint: mat(0xb07d4b, 0, 0, .96, 0),
+          cavity: mat(0x161918, 0, 0, .96, 0),
+          scrapMetal: mat(0x5c6368, 0, 0, .45, .65),
+          wire: mat(0xd89634, 0x2ec8ff, .45, .5, .5),
+        }, { kind: item.kind, list });
         this.scene.add(group); entity = {group, selection, hp, hitTarget, cargo, damage, kind: item.kind, isUnit, selectable: false, recoilUntil: 0, emission: 0,
+          sparkTimer: 0, nextSpark: .3 + Math.random() * .5, looseTimer: 0,
           placed: false, speed: 0, gait: 0, dust: 0, heading: undefined, aimYaw: 0, aimUntil: 0,
           // Health and where the last hit came from, for the damage shown on the model.
           fraction: 1, hitFrom: null, hitAt: -Infinity,
           // Which way a battered vehicle lists, or which leg a wounded soldier favors.
-          hurt: 0, list: (Math.random() < .5 ? -1 : 1) * (.07 + Math.random() * .04)}; this.entities.set(key, entity);
+          hurt: 0, list}; this.entities.set(key, entity);
       }
       const fraction = entity.fraction = Math.max(0, item.hp / item.max_hp), state = condition(fraction);
       if (isUnit) animateUnit(entity, item, dt, now, this.combatEffects, this.compact, state);
@@ -926,16 +1028,38 @@ export class BattlefieldRenderer {
     this.renderer.render(this.scene, this.camera);
   }
   // Health lost shows on the model itself. New wounds face the last attacker
-  // and throw off debris; Damaged vehicles and buildings smoke from their
-  // wounds, and Critical ones burn.
+  // and throw off debris and parts; Damaged vehicles and buildings smoke and
+  // spark electrically from their wounds, and Critical ones burn and arc.
   showDamage(entity, dt, now) {
     const heavy = !entity.isUnit || VEHICLES.has(entity.kind), visible = entity.group.visible;
     const opened = entity.damage.update(entity.fraction, now - entity.hitAt < 3000 ? entity.hitFrom : null);
-    if (heavy && visible) for (const wound of opened) {
-      this.combatEffects.burst(entity.damage.locate(wound, this.point), entity.isUnit ? .45 : .9, false);
+    const detached = entity.damage.takeDetached();
+    if (visible) {
+      for (const part of detached) {
+        this.combatEffects.dropPart(part);
+        if (heavy || entity.kind === 'rocket') {
+          this.combatEffects.electricSpark(part.origin, entity.isUnit ? .65 : .85);
+        }
+      }
+      if (heavy && opened.length) {
+        this.combatEffects.burst(entity.damage.locate(opened[opened.length - 1], this.point), entity.isUnit ? .32 : .42, false);
+        this.combatEffects.electricSpark(this.point, entity.isUnit ? .65 : .85);
+      }
     }
     const state = condition(entity.fraction);
-    if (!heavy || !visible || !state || !entity.damage.wounds.length) { entity.emission = 0; return; }
+    if (!visible || !state || !entity.damage.wounds.length) {
+      entity.emission = 0; entity.sparkTimer = 0; return;
+    }
+    if (heavy || (entity.kind === 'rocket' && state === 2)) {
+      entity.sparkTimer += dt;
+      if (entity.sparkTimer >= entity.nextSpark) {
+        entity.sparkTimer = 0;
+        entity.nextSpark = (state === 2 ? .15 : .35) + Math.random() * (state === 2 ? .17 : .30);
+        const origin = entity.damage.vent(state === 2 ? 3 : 4, this.point);
+        this.combatEffects.electricSpark(origin, !entity.isUnit ? .95 : entity.kind === 'rocket' ? .45 : .75);
+      }
+    }
+    if (!heavy) { entity.emission = 0; return; }
     entity.emission += dt;
     if (entity.emission < .18) return;
     entity.emission = 0;

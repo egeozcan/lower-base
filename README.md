@@ -66,7 +66,7 @@ During either a game or demo, **Pause** (or `P`) freezes the battlefield, produc
 - **Attack** sends all gathered troops north and automatically sends newly produced troops into battle. Use **Retreat** to recall attacking troops.
 - **Retreat** recalls deployed troops to the base rally area and keeps all newly completed units inside their barracks or factory. Recalled troops defend locally once they reach the rally area; active collectors keep mining. Choose **Gather** to release sheltered troops to the rally area, or **Attack** to release them into battle. Sheltered collectors resume mining in either mode. Units inside a building are lost if it is destroyed.
 - **Damage shows, and slows units down.** A unit at half its health or less is **Damaged** (yellow health bar) and moves at 75% speed. At a quarter or less it is **Critical** (red bar) and moves at 50%. Weapons are unaffected, and nothing is repaired, so recall Damaged troops early: they are slow to get away.
-  - Hits char and bend the side of a vehicle or building that faces the attacker, and knock rubble off buildings. Damaged vehicles and buildings smoke from those wounds and Critical ones burn. Wounded infantry stoop and limp, and battered vehicles list to one side.
+  - Hits scrape, char, and bend the side of a vehicle or building that faces the attacker, loosen and blow off exterior parts onto the ground, and knock rubble off buildings. Damaged vehicles, guns, and buildings smoke and throw electrical sparks and short-circuit arcs from those wounds, and Critical ones burn. Wounded infantry stoop and limp, wear progressive bandages, splints, and field crutches while shedding damaged helmets and armor, and battered vehicles list to one side.
   - Shell bursts, wrecks and demolition blasts leave burn marks and craters, flatten grass and blacken nearby trees for the rest of the match. The scarred ground is cosmetic: it never affects movement or combat.
 - Eliminate all enemy units and buildings to win. You lose when all your units and buildings are destroyed.
 
@@ -188,7 +188,11 @@ The renderer draws damage in two modules:
 
 - `web/damage.js` opens a wound on a model for each step of health it loses,
   at a corner or edge facing the last attacker (each shot event names its
-  target). The surface around a wound chars, bends inward and sags; smoke and
+  target). The surface around a wound scrapes, chars, bends inward and sags;
+  exterior parts loosen or blow off onto the terrain via `web/combat-effects.js`,
+  electrical sparks and short-circuit arcs crackle from damaged vehicles,
+  structures, and critical rocket suits, wounded infantry gain progressive
+  bandages, splints, and crutches while losing headgear and gear, and smoke and
   fire rise from the newest wounds. A model's meshes and materials are
   untouched until its first wound.
 - `web/terrain-damage.js` keeps terrain-conforming burn marks, compound
