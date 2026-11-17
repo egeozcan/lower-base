@@ -9,7 +9,7 @@ const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
 // Plane heights are shared with renderer.js so decals and rims never drift out
 // of sync with the terrain slabs they sit on.
 export const GROUND_Y = -.195, ROAD_Y = -.055, APRON_Y = .036;
-const ROAD_HALF_X = 4.5, ROAD_HALF_Z = 55;
+const ROAD_HALF_X = 4.5, ROAD_HALF_Z = 42;
 const APRON_HALF_X = 18.5, APRON_Z = 42, APRON_HALF_Z = 9.5;
 const SOIL_SCAR_Y = GROUND_Y + .01, ROAD_SCAR_Y = ROAD_Y + .033, APRON_SCAR_Y = APRON_Y + .032;
 
@@ -174,12 +174,14 @@ function markTexture() {
   for (let y = 0; y < size; y++) {
     // Flip canvas rows because DataTexture places row 0 at uv.y = 0.
     const srcRow = (size - 1 - y) * size * 4, dstRow = y * size * 4;
-    for (let x = 0; x < size * 4; x += 4) {
-      const s = srcRow + x, d = dstRow + x;
-      dst[d] = rData[s];
-      dst[d + 1] = gData[s];
+    for (let x = 0; x < size; x++) {
+      const s = srcRow + x * 4, d = dstRow + x * 4;
+      const hash = ((Math.imul(x + 1, 73856093) ^ Math.imul(y + 1, 19349663)) >>> 0) & 255;
+      const grain = (hash / 255 - .5) * .28;
+      dst[d] = rData[s] > 4 ? Math.max(0, Math.min(255, rData[s] * (1 + grain))) : rData[s];
+      dst[d + 1] = gData[s] > 4 ? Math.max(0, Math.min(255, gData[s] * (1 - grain * .7))) : gData[s];
       dst[d + 2] = bData[s];
-      dst[d + 3] = aData[s];
+      dst[d + 3] = aData[s] > 8 ? Math.max(0, Math.min(255, aData[s] * (1 + grain * .65))) : aData[s];
     }
   }
 
@@ -264,7 +266,7 @@ function markBatch(scene, capacity) {
 function rimGeometry() {
   let seed = 23;
   const next = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
-  const positions = [], colors = [], transform = new THREE.Object3D();
+  const positions = [], colors = [], uvs = [], transform = new THREE.Object3D();
   transform.rotation.order = 'YXZ';
 
   const pushChunk = (geo, angle, distance, y, sx, sy, sz, rx, ry, rz, shadeFn) => {
@@ -277,6 +279,7 @@ function rimGeometry() {
     const arr = chunk.attributes.position.array;
     for (let j = 0; j < arr.length; j += 3) {
       positions.push(arr[j], arr[j + 1], arr[j + 2]);
+      uvs.push(arr[j] * 1.4, arr[j + 2] * 1.4);
       const s = shadeFn(arr[j], arr[j + 1], arr[j + 2]);
       colors.push(s, s, s);
     }
@@ -318,8 +321,31 @@ function rimGeometry() {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   geometry.computeVertexNormals();
   return geometry;
+}
+
+function earthGrainTextures() {
+  let seed = 419;
+  const next = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
+  const make = (base, light, dark, count, colorSpace) => {
+    const canvas = document.createElement('canvas'); canvas.width = canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = base; ctx.fillRect(0, 0, 128, 128);
+    for (let i = 0; i < count; i++) {
+      ctx.fillStyle = next() < .5 ? light : dark;
+      ctx.fillRect(next() * 128, next() * 128, 1 + next() * 3, 1 + next() * 3);
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = colorSpace;
+    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+    return texture;
+  };
+  return {
+    map: make('#dcd8d0', 'rgba(255,255,255,.22)', 'rgba(65,58,48,.3)', 1200, THREE.SRGBColorSpace),
+    bumpMap: make('#828282', 'rgba(225,225,225,.35)', 'rgba(35,35,35,.35)', 1400, THREE.NoColorSpace),
+  };
 }
 
 // Scorched & blast-combed grass tufts, restored when the next match starts.
@@ -503,8 +529,10 @@ export class TerrainDamage {
     this.batch = markBatch(scene, this.capacity);
     this.marks = []; this.oldest = 0;
 
+    const earth = this.earthTextures = earthGrainTextures();
     const rimMat = new THREE.MeshStandardMaterial({
       color: 0xffffff, roughness: .95, metalness: .02, flatShading: true, vertexColors: true,
+      map: earth.map, bumpMap: earth.bumpMap, bumpScale: .06,
     });
     this.rims = new THREE.InstancedMesh(rimGeometry(), rimMat, compact ? 32 : 64);
     this.rims.setColorAt(0, new THREE.Color());
@@ -515,6 +543,7 @@ export class TerrainDamage {
 
     const ejectaMat = new THREE.MeshStandardMaterial({
       color: 0xffffff, roughness: .95, metalness: .02, flatShading: true,
+      map: earth.map, bumpMap: earth.bumpMap, bumpScale: .05,
     });
     this.ejecta = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), ejectaMat, compact ? 64 : 128);
     this.ejecta.setColorAt(0, new THREE.Color());
@@ -900,5 +929,6 @@ export class TerrainDamage {
     mesh.dispose(); mesh.geometry.dispose(); mesh.material.dispose(); texture.dispose();
     this.rims.dispose(); this.rims.geometry.dispose(); this.rims.material.dispose();
     this.ejecta.dispose(); this.ejecta.geometry.dispose(); this.ejecta.material.dispose();
+    this.earthTextures.map.dispose(); this.earthTextures.bumpMap.dispose();
   }
 }

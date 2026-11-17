@@ -290,3 +290,48 @@ test('wounded infantry gain progressive bandages, splints, crutches, and shed ge
     assert.ok(child.position.x < .45, `rocket trooper accessories should clear right shoulder pod (x=${child.position.x})`);
   }
 });
+
+test('building and unit meshes carry valid UVs and textured materials while preserving faction colors', () => {
+  const structures = ['command', 'refinery', 'factory', 'barracks', 'emplacement'];
+  for (const kind of structures) {
+    const model = buildingMesh({ kind, team: 'player' });
+    let meshCount = 0;
+    let texturedCount = 0;
+    model.traverse(obj => {
+      if (!obj.isMesh || obj.userData.decoration) return;
+      meshCount++;
+      const { position, uv } = obj.geometry.attributes;
+      assert.ok(uv, `${kind} mesh should have uv attribute`);
+      assert.equal(uv.count, position.count, `${kind} uv count should match position count`);
+      let nonZero = false;
+      for (let i = 0; i < uv.array.length; i++) {
+        assert.ok(Number.isFinite(uv.array[i]), `${kind} uv coordinate should be finite`);
+        if (Math.abs(uv.array[i]) > 1e-4) nonZero = true;
+      }
+      assert.ok(nonZero, `${kind} uvs should not all be zero`);
+      if (obj.material.map && obj.material.bumpMap) texturedCount++;
+    });
+    assert.ok(meshCount >= 3, `${kind} should build multiple material meshes`);
+    assert.equal(texturedCount, meshCount, `all structural meshes of ${kind} should carry diffuse and bump maps`);
+  }
+
+  const units = ['tank', 'collector', 'demolition', 'soldier', 'rocket'];
+  for (const kind of units) {
+    const model = unitMesh({ kind, team: 'enemy' });
+    let meshCount = 0;
+    let texturedCount = 0;
+    const hexColors = new Set();
+    model.traverse(obj => {
+      if (!obj.isMesh || obj.userData.decoration) return;
+      meshCount++;
+      const { position, uv } = obj.geometry.attributes;
+      assert.ok(uv, `${kind} mesh should have uv attribute`);
+      assert.equal(uv.count, position.count, `${kind} uv count should match position count`);
+      if (obj.material.map && obj.material.bumpMap) texturedCount++;
+      hexColors.add(obj.material.color.getHex());
+    });
+    assert.ok(meshCount >= 3, `${kind} should build multiple material meshes`);
+    assert.ok(texturedCount >= meshCount - 2, `${kind} meshes should carry diffuse and bump maps (excluding emissive lamps/skin)`);
+    assert.ok(hexColors.has(0xc63227), `${kind} should preserve enemy faction accent color 0xc63227`);
+  }
+});

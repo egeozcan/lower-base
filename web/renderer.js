@@ -9,12 +9,17 @@ import { GROUND_Y, ROAD_Y, APRON_Y } from './terrain-damage.js';
 // readable when dozens of units are moving at once.
 const C = {
   player: 0x3267c8, playerDark: 0x234584, enemy: 0xc63227, enemyDark: 0x80271e,
-  metal: 0x263743, dark: 0x111e27, light: 0x829ba2, ground: 0x172a32,
+  metal: 0x263743, dark: 0x222d36, light: 0x829ba2, ground: 0x172a32,
 };
 const mats = new Map();
-function mat(color, emissive = 0, intensity = 0, roughness = 0.88, metalness = 0.12) {
-  const key = `${color}:${emissive}:${intensity}:${roughness}:${metalness}`;
-  if (!mats.has(key)) mats.set(key, new THREE.MeshStandardMaterial({ color, roughness, metalness, emissive, emissiveIntensity: intensity }));
+const finishes = new Map();
+function mat(color, emissive = 0, intensity = 0, roughness = 0.88, metalness = 0.12, finish = null) {
+  const key = `${color}:${emissive}:${intensity}:${roughness}:${metalness}:${finish || ''}`;
+  if (!mats.has(key)) {
+    const opts = { color, roughness, metalness, emissive, emissiveIntensity: intensity };
+    if (finish) Object.assign(opts, finishMaps(finish));
+    mats.set(key, new THREE.MeshStandardMaterial(opts));
+  }
   return mats.get(key);
 }
 // Damaged models swap each material for one shared variant that shows soot.
@@ -22,12 +27,47 @@ function sooted(material) {
   if (!mats.has(material)) mats.set(material, sootVariant(material));
   return mats.get(material);
 }
-function box(parent, w, h, d, x, y, z, material, angle = 0) {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
+function scaleBoxUVs(geometry, w, h, d, uvScale) {
+  const pos = geometry.attributes.position.array;
+  const norm = geometry.attributes.normal.array;
+  const uv = geometry.attributes.uv.array;
+  for (let i = 0, j = 0; i < pos.length; i += 3, j += 2) {
+    const nx = Math.abs(norm[i]), ny = Math.abs(norm[i + 1]), nz = Math.abs(norm[i + 2]);
+    const x = pos[i] + w * .5, y = pos[i + 1] + h * .5, z = pos[i + 2] + d * .5;
+    if (ny >= nx && ny >= nz) { uv[j] = x * uvScale; uv[j + 1] = z * uvScale; }
+    else if (nx >= nz) { uv[j] = z * uvScale; uv[j + 1] = y * uvScale; }
+    else { uv[j] = x * uvScale; uv[j + 1] = y * uvScale; }
+  }
+  geometry.attributes.uv.needsUpdate = true;
+}
+function box(parent, w, h, d, x, y, z, material, angle = 0, uvScale = 0) {
+  const geometry = new THREE.BoxGeometry(w, h, d);
+  if (uvScale > 0) scaleBoxUVs(geometry, w, h, d, uvScale);
+  const m = new THREE.Mesh(geometry, material);
   m.position.set(x, y, z); m.rotation.y = angle; m.castShadow = true; m.receiveShadow = true; parent.add(m); return m;
 }
-function cylinder(parent, r1, r2, h, x, y, z, material, segments = 8) {
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(r1, r2, h, segments), material);
+function scaleCylinderUVs(geometry, r1, r2, h, uvScale) {
+  const pos = geometry.attributes.position;
+  const norm = geometry.attributes.normal;
+  const uv = geometry.attributes.uv;
+  if (!uv || !pos || !norm) return;
+  // Quantize circumference UVs to an integer so periodic textures wrap seamlessly.
+  const su = Math.max(1, Math.round((r1 + r2) * 1.25 * uvScale));
+  const sv = Math.max(.25, h * uvScale);
+  for (let i = 0; i < uv.count; i++) {
+    if (Math.abs(norm.getY(i)) > .7) {
+      uv.setXY(i, pos.getX(i) * uvScale, pos.getZ(i) * uvScale);
+    } else {
+      uv.setXY(i, uv.getX(i) * su, uv.getY(i) * sv);
+    }
+  }
+  uv.needsUpdate = true;
+  geometry.userData.hasUV = true;
+}
+function cylinder(parent, r1, r2, h, x, y, z, material, segments = 8, uvScale = .48) {
+  const geometry = new THREE.CylinderGeometry(r1, r2, h, segments);
+  scaleCylinderUVs(geometry, r1, r2, h, uvScale);
+  const m = new THREE.Mesh(geometry, material);
   m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; parent.add(m); return m;
 }
 function ring(radius, color, opacity = 1) {
@@ -39,12 +79,62 @@ function ring(radius, color, opacity = 1) {
 function seeded(seed) {
   return () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
 }
-function paintedTexture(width, height, paint) {
+function configureTexture(canvas, options = {}) {
+  const {
+    colorSpace = THREE.SRGBColorSpace,
+    wrapS = THREE.ClampToEdgeWrapping,
+    wrapT = THREE.ClampToEdgeWrapping,
+    repeat = null,
+    anisotropy = 8,
+  } = options;
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = colorSpace;
+  texture.wrapS = wrapS;
+  texture.wrapT = wrapT;
+  if (repeat) texture.repeat.set(repeat[0], repeat[1]);
+  texture.anisotropy = anisotropy;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  return texture;
+}
+function paintedTexture(width, height, paint, options = {}) {
   const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
   paint(canvas.getContext('2d'), width, height);
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace; texture.anisotropy = 4;
-  return texture;
+  return configureTexture(canvas, options);
+}
+// Paint synchronized color, bump, and roughness canvases in one pass so seams,
+// cracks, rivets, and wear align pixel-for-pixel across maps.
+function layeredMaps(width, height, paint, options = {}) {
+  const make = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = width; canvas.height = height;
+    return { canvas, ctx: canvas.getContext('2d') };
+  };
+  const color = make(), bump = make();
+  const rough = options.roughness ? make() : null;
+  paint({ c: color.ctx, b: bump.ctx, r: rough?.ctx || null }, width, height);
+  const { bumpScale = .04, ...texOpts } = options;
+  const dataOpts = { ...texOpts, colorSpace: THREE.NoColorSpace };
+  const result = {
+    map: configureTexture(color.canvas, { ...texOpts, colorSpace: THREE.SRGBColorSpace }),
+    bumpMap: configureTexture(bump.canvas, dataOpts),
+    bumpScale,
+  };
+  if (rough) result.roughnessMap = configureTexture(rough.canvas, dataOpts);
+  return result;
+}
+function strokeBox(ctx, x, y, w, h) {
+  ctx.beginPath();
+  ctx.moveTo(x, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + h); ctx.lineTo(x, y + h);
+  ctx.closePath(); ctx.stroke();
+}
+function wrapDraw(w, h, x, y, margin, fn) {
+  const xs = [0], ys = [0];
+  if (x < margin) xs.push(w);
+  if (x > w - margin) xs.push(-w);
+  if (y < margin) ys.push(h);
+  if (y > h - margin) ys.push(-h);
+  for (const ox of xs) for (const oy of ys) fn(x + ox, y + oy);
 }
 function speckle(ctx, width, height, count, random, light, dark, size = 1) {
   for (let i = 0; i < count; i++) {
@@ -57,76 +147,628 @@ function blotch(ctx, x, y, radius, color, alpha) {
   gradient.addColorStop(0, `rgba(${color},${alpha})`); gradient.addColorStop(1, `rgba(${color},0)`);
   ctx.fillStyle = gradient; ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
 }
+function drawRivet(c, b, x, y, r = 2) {
+  c.fillStyle = 'rgba(42,46,42,.55)';
+  c.beginPath(); c.arc(x + .6, y + .6, r * 1.15, 0, Math.PI * 2); c.fill();
+  c.fillStyle = 'rgba(246,248,244,.85)';
+  c.beginPath(); c.arc(x, y, r * .85, 0, Math.PI * 2); c.fill();
+  b.fillStyle = '#404040';
+  b.beginPath(); b.arc(x, y, r * 1.25, 0, Math.PI * 2); b.fill();
+  b.fillStyle = '#f5f5f5';
+  b.beginPath(); b.arc(x, y, r * .85, 0, Math.PI * 2); b.fill();
+}
+function finishMaps(kind) {
+  if (finishes.has(kind)) return finishes.get(kind);
+  const tile = { wrapS: THREE.RepeatWrapping, wrapT: THREE.RepeatWrapping };
+  let maps;
+  if (kind === 'armor') {
+    maps = layeredMaps(512, 512, ({ c, b, r }, w, h) => {
+      const random = seeded(401);
+      c.fillStyle = '#efefef'; c.fillRect(0, 0, w, h);
+      b.fillStyle = '#8a8a8a'; b.fillRect(0, 0, w, h);
+      r.fillStyle = '#dcdcdc'; r.fillRect(0, 0, w, h);
+      // Staggered military armor plate panels with subtle batch tone shifts.
+      const rows = 4, rowH = h / rows;
+      for (let row = 0; row < rows; row++) {
+        const cols = row % 2 === 0 ? 2 : 3, colW = w / cols, shift = row % 2 ? colW * .35 : 0;
+        for (let col = -1; col <= cols; col++) {
+          const px = col * colW + shift, py = row * rowH;
+          const tone = 224 + Math.floor(random() * 26);
+          c.fillStyle = `rgb(${tone},${tone},${tone - 2})`;
+          c.fillRect(px + 2, py + 2, colW - 4, rowH - 4);
+          const bTone = 132 + Math.floor(random() * 14);
+          b.fillStyle = `rgb(${bTone},${bTone},${bTone})`;
+          b.fillRect(px + 2, py + 2, colW - 4, rowH - 4);
+          const rTone = 192 + Math.floor(random() * 52);
+          r.fillStyle = `rgb(${rTone},${rTone},${rTone})`;
+          r.fillRect(px + 2, py + 2, colW - 4, rowH - 4);
+          // Bevel highlight along top & left panel edges, seam groove around borders.
+          c.strokeStyle = 'rgba(255,255,255,.36)'; c.lineWidth = 2;
+          c.beginPath(); c.moveTo(px + 3, py + rowH - 4); c.lineTo(px + 3, py + 3); c.lineTo(px + colW - 4, py + 3); c.stroke();
+          b.strokeStyle = '#d4d4d4'; b.lineWidth = 2;
+          b.beginPath(); b.moveTo(px + 3, py + rowH - 4); b.lineTo(px + 3, py + 3); b.lineTo(px + colW - 4, py + 3); b.stroke();
+          r.strokeStyle = '#929292'; r.lineWidth = 2;
+          r.beginPath(); r.moveTo(px + 3, py + rowH - 4); r.lineTo(px + 3, py + 3); r.lineTo(px + colW - 4, py + 3); r.stroke();
+          c.strokeStyle = 'rgba(84,88,82,.78)'; c.lineWidth = 3;
+          strokeBox(c, px, py, colW, rowH);
+          b.strokeStyle = '#202020'; b.lineWidth = 3.5;
+          strokeBox(b, px, py, colW, rowH);
+          r.strokeStyle = '#f2f2f2'; r.lineWidth = 3;
+          strokeBox(r, px, py, colW, rowH);
+          // Corner and seam rivets.
+          for (const rx of [px + 11, px + colW * .5, px + colW - 11]) {
+            for (const ry of [py + 11, py + rowH - 11]) drawRivet(c, b, rx, ry, 2.3);
+          }
+        }
+      }
+      // Vertical rain-grime streaks and rolled-steel micro-grain.
+      for (let i = 0; i < 140; i++) {
+        const x = random() * w, y = random() * h, len = 18 + random() * 68;
+        const alpha = .03 + random() * .07;
+        wrapDraw(w, h, x, y, len, (wx, wy) => {
+          const g = c.createLinearGradient(wx, wy, wx, wy + len);
+          g.addColorStop(0, `rgba(72,74,68,${alpha})`); g.addColorStop(1, 'rgba(72,74,68,0)');
+          c.fillStyle = g; c.fillRect(wx, wy, 2 + random() * 4, len);
+        });
+      }
+      // Exposed metallic edge scratches with low roughness glint.
+      for (let i = 0; i < 85; i++) {
+        const x = random() * w, y = random() * h, dx = (random() - .5) * 30, dy = (random() - .5) * 20;
+        wrapDraw(w, h, x, y, 34, (wx, wy) => {
+          c.strokeStyle = 'rgba(255,255,255,.4)'; c.lineWidth = 1.3;
+          c.beginPath(); c.moveTo(wx, wy); c.lineTo(wx + dx, wy + dy); c.stroke();
+          b.strokeStyle = '#424242'; b.lineWidth = 1.3;
+          b.beginPath(); b.moveTo(wx, wy); b.lineTo(wx + dx, wy + dy); b.stroke();
+          r.strokeStyle = '#5c5c5c'; r.lineWidth = 1.8;
+          r.beginPath(); r.moveTo(wx, wy); r.lineTo(wx + dx, wy + dy); r.stroke();
+        });
+      }
+      speckle(c, w, h, 8500, random, 'rgba(255,255,255,.08)', 'rgba(55,58,52,.1)', 1.5);
+      speckle(b, w, h, 7000, random, 'rgba(210,210,210,.16)', 'rgba(65,65,65,.16)', 1.5);
+    }, { ...tile, roughness: true, bumpScale: .052 });
+  } else if (kind === 'steel') {
+    maps = layeredMaps(256, 256, ({ c, b, r }, w, h) => {
+      const random = seeded(503);
+      c.fillStyle = '#eceeed'; c.fillRect(0, 0, w, h);
+      b.fillStyle = '#848484'; b.fillRect(0, 0, w, h);
+      r.fillStyle = '#b4b4b4'; r.fillRect(0, 0, w, h);
+      // Directional brushed machining grain.
+      for (let i = 0; i < 900; i++) {
+        const y = random() * h, x = random() * w, len = 14 + random() * 64;
+        const bright = random() < .5;
+        wrapDraw(w, h, x, y, len, (wx, wy) => {
+          c.fillStyle = bright ? 'rgba(255,255,255,.12)' : 'rgba(95,100,104,.12)';
+          c.fillRect(wx, wy, len, 1);
+          b.fillStyle = bright ? 'rgba(185,185,185,.2)' : 'rgba(72,72,72,.2)';
+          b.fillRect(wx, wy, len, 1);
+          r.fillStyle = bright ? 'rgba(128,128,128,.22)' : 'rgba(210,210,210,.18)';
+          r.fillRect(wx, wy, len, 1);
+        });
+      }
+      // Machined seam bands and micro-oil smudges.
+      for (const sy of [64, 192]) {
+        c.fillStyle = 'rgba(76,82,86,.45)'; c.fillRect(0, sy - 1, w, 2);
+        b.fillStyle = '#262626'; b.fillRect(0, sy - 1, w, 2);
+        for (let rx = 16; rx < w; rx += 32) drawRivet(c, b, rx, sy - 8, 1.8);
+      }
+      for (let i = 0; i < 12; i++) {
+        const x = random() * w, y = random() * h, rad = 14 + random() * 24;
+        wrapDraw(w, h, x, y, rad, (wx, wy) => {
+          blotch(c, wx, wy, rad, '90,94,96', .14);
+          blotch(r, wx, wy, rad, '105,105,105', .28);
+        });
+      }
+    }, { ...tile, roughness: true, bumpScale: .035 });
+  } else if (kind === 'dark' || kind === 'tread') {
+    const isTread = kind === 'tread';
+    maps = layeredMaps(256, 256, ({ c, b, r }, w, h) => {
+      const random = seeded(isTread ? 617 : 619);
+      c.fillStyle = '#dedede'; c.fillRect(0, 0, w, h);
+      b.fillStyle = '#6e6e6e'; b.fillRect(0, 0, w, h);
+      r.fillStyle = '#d4d4d4'; r.fillRect(0, 0, w, h);
+      if (isTread) {
+        // Heavy vehicle track lugs and vulcanized chevron cleats.
+        const step = 32;
+        for (let y = 0; y < h; y += step) {
+          c.fillStyle = '#a4a7a4'; c.fillRect(0, y, w, 9);
+          c.fillStyle = '#f2f4f2'; c.fillRect(0, y + 11, w, 12);
+          b.fillStyle = '#242424'; b.fillRect(0, y, w, 9);
+          b.fillStyle = '#e6e6e6'; b.fillRect(0, y + 11, w, 12);
+          r.fillStyle = '#9e9e9e'; r.fillRect(0, y + 11, w, 12);
+          for (let x = 0; x < w; x += 32) {
+            c.fillStyle = '#8b8e8b'; c.fillRect(x + 12, y + 11, 5, 12);
+            b.fillStyle = '#383838'; b.fillRect(x + 12, y + 11, 5, 12);
+          }
+        }
+      } else {
+        // Cast-iron housings, louvers, and maintenance hatches.
+        for (let y = 16; y < h; y += 64) {
+          for (let x = 16; x < w; x += 64) {
+            c.strokeStyle = 'rgba(72,76,78,.65)'; c.lineWidth = 2; strokeBox(c, x - 12, y - 12, 56, 56);
+            b.strokeStyle = '#242424'; b.lineWidth = 2.5; strokeBox(b, x - 12, y - 12, 56, 56);
+          }
+        }
+        for (let y = 32; y < h; y += 128) for (let i = 0; i < 4; i++) {
+          c.fillStyle = 'rgba(55,60,64,.65)'; c.fillRect(28, y + i * 10, w - 56, 5);
+          b.fillStyle = '#1e1e1e'; b.fillRect(28, y + i * 10, w - 56, 5);
+        }
+      }
+      speckle(c, w, h, 3500, random, 'rgba(255,255,255,.1)', 'rgba(40,42,40,.14)', 1.5);
+      speckle(b, w, h, 3500, random, 'rgba(205,205,205,.18)', 'rgba(45,45,45,.18)', 1.5);
+    }, { ...tile, roughness: true, bumpScale: isTread ? .065 : .045 });
+  } else if (kind === 'trim') {
+    maps = layeredMaps(512, 512, ({ c, b, r }, w, h) => {
+      const random = seeded(709);
+      c.fillStyle = '#ebebeb'; c.fillRect(0, 0, w, h);
+      b.fillStyle = '#8c8c8c'; b.fillRect(0, 0, w, h);
+      r.fillStyle = '#d8d8d8'; r.fillRect(0, 0, w, h);
+      // Painted military trim plates with seams, rivets, grime streaks, and chipped edges.
+      for (let py = 0; py < h; py += 128) for (let px = 0; px < w; px += 256) {
+        const tone = 228 + Math.floor(random() * 20);
+        c.fillStyle = `rgb(${tone},${tone},${tone})`; c.fillRect(px + 2, py + 2, 252, 124);
+        c.strokeStyle = 'rgba(72,76,82,.72)'; c.lineWidth = 2.5; strokeBox(c, px, py, 256, 128);
+        b.strokeStyle = '#242424'; b.lineWidth = 3; strokeBox(b, px, py, 256, 128);
+        r.strokeStyle = '#efefef'; r.lineWidth = 3; strokeBox(r, px, py, 256, 128);
+        for (const rx of [px + 12, px + 128, px + 244]) {
+          for (const ry of [py + 12, py + 116]) drawRivet(c, b, rx, ry, 2.0);
+        }
+      }
+      for (let i = 0; i < 90; i++) {
+        const x = random() * w, y = random() * h, len = 14 + random() * 44;
+        wrapDraw(w, h, x, y, len, (wx, wy) => {
+          const g = c.createLinearGradient(wx, wy, wx, wy + len);
+          g.addColorStop(0, `rgba(48,50,48,${.06 + random() * .09})`); g.addColorStop(1, 'rgba(48,50,48,0)');
+          c.fillStyle = g; c.fillRect(wx, wy, 2 + random() * 3, len);
+        });
+      }
+      for (let i = 0; i < 75; i++) {
+        const x = random() * w, y = random() * h, dx = (random() - .5) * 26, dy = (random() - .5) * 16;
+        wrapDraw(w, h, x, y, 28, (wx, wy) => {
+          c.strokeStyle = 'rgba(255,255,255,.42)'; c.lineWidth = 1.2;
+          c.beginPath(); c.moveTo(wx, wy); c.lineTo(wx + dx, wy + dy); c.stroke();
+          b.strokeStyle = '#484848'; b.lineWidth = 1.2;
+          b.beginPath(); b.moveTo(wx, wy); b.lineTo(wx + dx, wy + dy); b.stroke();
+          r.strokeStyle = '#626262'; r.lineWidth = 1.5;
+          r.beginPath(); r.moveTo(wx, wy); r.lineTo(wx + dx, wy + dy); r.stroke();
+        });
+      }
+      speckle(c, w, h, 6500, random, 'rgba(255,255,255,.09)', 'rgba(65,68,70,.12)', 1.5);
+      speckle(b, w, h, 5000, random, 'rgba(185,185,185,.16)', 'rgba(75,75,75,.16)', 1.5);
+    }, { ...tile, roughness: true, bumpScale: .04 });
+  } else if (kind === 'hazard') {
+    maps = layeredMaps(256, 256, ({ c, b, r }, w, h) => {
+      const random = seeded(811);
+      // Paint bright white + dark charcoal so multiplying by caution yellow stays saturated.
+      c.fillStyle = '#ffffff'; c.fillRect(0, 0, w, h);
+      b.fillStyle = '#9c9c9c'; b.fillRect(0, 0, w, h);
+      r.fillStyle = '#bcbcbc'; r.fillRect(0, 0, w, h);
+      const period = 128;
+      for (let k = -h; k <= w + h; k += period) {
+        c.fillStyle = '#23211d';
+        c.beginPath();
+        c.moveTo(k, 0); c.lineTo(k + 58, 0); c.lineTo(k + 58 - h, h); c.lineTo(k - h, h);
+        c.closePath(); c.fill();
+        b.fillStyle = '#707070';
+        b.beginPath();
+        b.moveTo(k, 0); b.lineTo(k + 58, 0); b.lineTo(k + 58 - h, h); b.lineTo(k - h, h);
+        b.closePath(); b.fill();
+        r.fillStyle = '#e0e0e0';
+        r.beginPath();
+        r.moveTo(k, 0); r.lineTo(k + 58, 0); r.lineTo(k + 58 - h, h); r.lineTo(k - h, h);
+        r.closePath(); r.fill();
+      }
+      // Paint-chipped edge wear and industrial grime.
+      for (let i = 0; i < 120; i++) {
+        const x = random() * w, y = random() * h, sz = 1.5 + random() * 3.5;
+        wrapDraw(w, h, x, y, 5, (wx, wy) => {
+          c.fillStyle = random() < .4 ? 'rgba(255,255,255,.35)' : 'rgba(55,50,42,.38)';
+          c.fillRect(wx, wy, sz, sz * .7);
+          b.fillStyle = 'rgba(60,60,60,.45)';
+          b.fillRect(wx, wy, sz, sz * .7);
+        });
+      }
+    }, { ...tile, roughness: true, bumpScale: .035 });
+  } else if (kind === 'glass') {
+    maps = layeredMaps(128, 128, ({ c, b }, w, h) => {
+      const grad = c.createLinearGradient(0, 0, w, h);
+      grad.addColorStop(0, '#ffffff'); grad.addColorStop(.45, '#b8c8d2'); grad.addColorStop(.52, '#f5fbff'); grad.addColorStop(1, '#9ab0be');
+      c.fillStyle = grad; c.fillRect(0, 0, w, h);
+      b.fillStyle = '#909090'; b.fillRect(0, 0, w, h);
+      c.strokeStyle = 'rgba(30,40,46,.7)'; c.lineWidth = 4; strokeBox(c, 2, 2, w - 4, h - 4);
+      b.strokeStyle = '#303030'; b.lineWidth = 4; strokeBox(b, 2, 2, w - 4, h - 4);
+    }, { ...tile, bumpScale: .02 });
+  } else if (kind === 'rust') {
+    maps = layeredMaps(256, 256, ({ c, b }, w, h) => {
+      const random = seeded(919);
+      c.fillStyle = '#dcd4cc'; c.fillRect(0, 0, w, h);
+      b.fillStyle = '#808080'; b.fillRect(0, 0, w, h);
+      for (let i = 0; i < 45; i++) {
+        const x = random() * w, y = random() * h, rad = 10 + random() * 24;
+        wrapDraw(w, h, x, y, rad, (wx, wy) => {
+          blotch(c, wx, wy, rad, random() < .5 ? '110,76,52' : '240,196,158', .32);
+          blotch(b, wx, wy, rad, random() < .5 ? '50,50,50' : '215,215,215', .35);
+        });
+      }
+      speckle(c, w, h, 4000, random, 'rgba(255,214,170,.25)', 'rgba(65,40,28,.3)', 1.5);
+      speckle(b, w, h, 4000, random, 'rgba(220,220,220,.3)', 'rgba(35,35,35,.35)', 1.5);
+    }, { ...tile, bumpScale: .06 });
+  } else if (kind === 'concrete') {
+    maps = layeredMaps(256, 256, ({ c, b }, w, h) => {
+      const random = seeded(1021);
+      c.fillStyle = '#ebebea'; c.fillRect(0, 0, w, h);
+      b.fillStyle = '#888888'; b.fillRect(0, 0, w, h);
+      for (let i = 0; i < 36; i++) {
+        const x = random() * w, y = random() * h, rad = 14 + random() * 32;
+        wrapDraw(w, h, x, y, rad, (wx, wy) => blotch(c, wx, wy, rad, '135,132,120', .14));
+      }
+      // Formwork panel joints and tie-rod recesses.
+      for (const sx of [0, 128]) {
+        c.strokeStyle = 'rgba(110,108,98,.55)'; c.lineWidth = 2;
+        c.beginPath(); c.moveTo(sx, 0); c.lineTo(sx, h); c.stroke();
+        b.strokeStyle = '#383838'; b.lineWidth = 2;
+        b.beginPath(); b.moveTo(sx, 0); b.lineTo(sx, h); b.stroke();
+        for (const ty of [48, 208]) {
+          c.fillStyle = 'rgba(92,90,82,.7)'; c.beginPath(); c.arc(sx + 64, ty, 3, 0, Math.PI * 2); c.fill();
+          b.fillStyle = '#202020'; b.beginPath(); b.arc(sx + 64, ty, 3.5, 0, Math.PI * 2); b.fill();
+        }
+      }
+      speckle(c, w, h, 4200, random, 'rgba(255,255,255,.15)', 'rgba(85,82,74,.16)', 1.5);
+      speckle(b, w, h, 4200, random, 'rgba(195,195,195,.2)', 'rgba(65,65,65,.2)', 1.5);
+    }, { ...tile, bumpScale: .045 });
+  } else if (kind === 'bark') {
+    maps = layeredMaps(256, 256, ({ c, b }, w, h) => {
+      const random = seeded(1151);
+      c.fillStyle = '#c8bfb2'; c.fillRect(0, 0, w, h);
+      b.fillStyle = '#848484'; b.fillRect(0, 0, w, h);
+      for (let i = 0; i < 180; i++) {
+        const x = random() * w, y = random() * h, len = 24 + random() * 60, bw = 2 + random() * 5;
+        const dark = random() < .52;
+        wrapDraw(w, h, x, y, len, (wx, wy) => {
+          c.fillStyle = dark ? 'rgba(62,48,36,.42)' : 'rgba(235,222,204,.32)';
+          c.fillRect(wx, wy, bw, len);
+          b.fillStyle = dark ? 'rgba(28,28,28,.55)' : 'rgba(225,225,225,.42)';
+          b.fillRect(wx, wy, bw, len);
+        });
+      }
+      speckle(b, w, h, 2800, random, 'rgba(200,200,200,.2)', 'rgba(40,40,40,.2)', 1.5);
+    }, { ...tile, bumpScale: .08 });
+  } else if (kind === 'foliage') {
+    maps = layeredMaps(256, 256, ({ c, b }, w, h) => {
+      const random = seeded(1237);
+      c.fillStyle = '#c8d1b8'; c.fillRect(0, 0, w, h);
+      b.fillStyle = '#707070'; b.fillRect(0, 0, w, h);
+      for (let i = 0; i < 680; i++) {
+        const x = random() * w, y = random() * h, ang = random() * Math.PI * 2, len = 8 + random() * 14;
+        const bright = random() < .46;
+        wrapDraw(w, h, x, y, 18, (wx, wy) => {
+          c.strokeStyle = bright ? 'rgba(255,255,240,.52)' : 'rgba(38,54,28,.58)';
+          c.lineWidth = 2.5 + random() * 2.5;
+          c.beginPath(); c.moveTo(wx, wy); c.lineTo(wx + Math.cos(ang) * len, wy + Math.sin(ang) * len); c.stroke();
+          b.strokeStyle = bright ? 'rgba(242,242,242,.55)' : 'rgba(32,32,32,.55)';
+          b.lineWidth = 2.5 + random() * 2.5;
+          b.beginPath(); b.moveTo(wx, wy); b.lineTo(wx + Math.cos(ang) * len, wy + Math.sin(ang) * len); b.stroke();
+        });
+      }
+    }, { ...tile, bumpScale: .085 });
+  } else if (kind === 'stone') {
+    maps = layeredMaps(256, 256, ({ c, b }, w, h) => {
+      const random = seeded(1303);
+      c.fillStyle = '#e0dfd8'; c.fillRect(0, 0, w, h);
+      b.fillStyle = '#848484'; b.fillRect(0, 0, w, h);
+      for (let i = 0; i < 50; i++) {
+        const x = random() * w, y = random() * h, rad = 12 + random() * 28;
+        wrapDraw(w, h, x, y, rad, (wx, wy) => {
+          blotch(c, wx, wy, rad, random() < .5 ? '118,120,112' : '250,248,240', .28);
+          blotch(b, wx, wy, rad, random() < .5 ? '58,58,58' : '212,212,212', .32);
+        });
+      }
+      for (let i = 0; i < 16; i++) {
+        let x = random() * w, y = random() * h;
+        const pts = [[x, y]];
+        for (let s = 0; s < 5; s++) { x += (random() - .5) * 24; y += (random() - .5) * 24; pts.push([x, y]); }
+        wrapDraw(w, h, pts[0][0], pts[0][1], 64, (ox, oy) => {
+          const dx = ox - pts[0][0], dy = oy - pts[0][1];
+          c.strokeStyle = 'rgba(78,76,70,.55)'; c.lineWidth = 1.5;
+          b.strokeStyle = '#252525'; b.lineWidth = 2;
+          for (const ctx of [c, b]) {
+            ctx.beginPath(); ctx.moveTo(pts[0][0] + dx, pts[0][1] + dy);
+            for (let p = 1; p < pts.length; p++) ctx.lineTo(pts[p][0] + dx, pts[p][1] + dy);
+            ctx.stroke();
+          }
+        });
+      }
+      speckle(c, w, h, 3000, random, 'rgba(255,255,255,.16)', 'rgba(65,65,60,.16)', 1.5);
+    }, { ...tile, bumpScale: .07 });
+  } else if (kind === 'ore') {
+    maps = layeredMaps(256, 256, ({ c, b, r }, w, h) => {
+      const random = seeded(1429);
+      c.fillStyle = '#efe2b6'; c.fillRect(0, 0, w, h);
+      b.fillStyle = '#9a9a9a'; b.fillRect(0, 0, w, h);
+      r.fillStyle = '#888888'; r.fillRect(0, 0, w, h);
+      // Crystalline mineral veins and bright amber facets.
+      for (let i = 0; i < 42; i++) {
+        const x = random() * w, y = random() * h, rad = 10 + random() * 24;
+        const bright = random() < .55;
+        wrapDraw(w, h, x, y, rad, (wx, wy) => {
+          blotch(c, wx, wy, rad, bright ? '255,252,224' : '116,84,32', bright ? .42 : .35);
+          blotch(b, wx, wy, rad, bright ? '235,235,235' : '45,45,45', .42);
+          blotch(r, wx, wy, rad, bright ? '64,64,64' : '215,215,215', .4);
+        });
+      }
+      for (let i = 0; i < 24; i++) {
+        let x = random() * w, y = random() * h;
+        const light = i % 2 === 0;
+        c.strokeStyle = light ? 'rgba(255,252,220,.72)' : 'rgba(84,58,20,.65)'; c.lineWidth = 2;
+        b.strokeStyle = light ? '#eeeeee' : '#262626'; b.lineWidth = 2.2;
+        r.strokeStyle = light ? '#484848' : '#d8d8d8'; r.lineWidth = 2.2;
+        for (const ctx of [c, b, r]) { ctx.beginPath(); ctx.moveTo(x, y); }
+        for (let s = 0; s < 4; s++) {
+          x += (random() - .5) * 32; y += (random() - .5) * 32;
+          c.lineTo(x, y); b.lineTo(x, y); r.lineTo(x, y);
+        }
+        c.stroke(); b.stroke(); r.stroke();
+      }
+      speckle(r, w, h, 2200, random, 'rgba(60,60,60,.4)', 'rgba(220,220,220,.3)', 2);
+    }, { ...tile, roughness: true, bumpScale: .055 });
+  } else if (kind === 'cloth' || kind === 'wood') {
+    const isWood = kind === 'wood';
+    maps = layeredMaps(128, 128, ({ c, b }, w, h) => {
+      const random = seeded(isWood ? 1511 : 1513);
+      c.fillStyle = '#f2efe8'; c.fillRect(0, 0, w, h);
+      b.fillStyle = '#848484'; b.fillRect(0, 0, w, h);
+      if (isWood) {
+        for (let i = 0; i < 140; i++) {
+          const y = random() * h, x = random() * w, len = 24 + random() * 64;
+          c.fillStyle = random() < .5 ? 'rgba(130,90,52,.22)' : 'rgba(255,244,225,.2)';
+          c.fillRect(x, y, len, 2);
+          b.fillStyle = random() < .5 ? 'rgba(60,60,60,.28)' : 'rgba(190,190,190,.28)';
+          b.fillRect(x, y, len, 2);
+        }
+      } else {
+        for (let p = 0; p < w; p += 6) {
+          c.fillStyle = 'rgba(180,174,162,.25)'; c.fillRect(p, 0, 2, h); c.fillRect(0, p, w, 2);
+          b.fillStyle = 'rgba(195,195,195,.3)'; b.fillRect(p, 0, 2, h); b.fillRect(0, p, w, 2);
+        }
+      }
+      speckle(b, w, h, 900, random, 'rgba(200,200,200,.15)', 'rgba(65,65,65,.15)');
+    }, { ...tile, bumpScale: isWood ? .04 : .03 });
+  } else if (kind === 'roadLine') {
+    maps = layeredMaps(128, 256, ({ c, b }, w, h) => {
+      const random = seeded(1601);
+      c.fillStyle = '#f2eee2'; c.fillRect(0, 0, w, h);
+      b.fillStyle = '#989898'; b.fillRect(0, 0, w, h);
+      // Chipped thermoplastic paint and dark asphalt bleed-through.
+      for (let i = 0; i < 80; i++) {
+        const x = random() * w, y = random() * h, sz = 3 + random() * 8;
+        c.fillStyle = `rgba(92,90,82,${.18 + random() * .35})`;
+        c.fillRect(x, y, sz, sz * 1.4);
+        b.fillStyle = 'rgba(48,48,48,.5)';
+        b.fillRect(x, y, sz, sz * 1.4);
+      }
+      speckle(c, w, h, 1400, random, 'rgba(255,255,255,.2)', 'rgba(80,78,72,.28)', 1.5);
+    }, { ...tile, bumpScale: .028 });
+  }
+  finishes.set(kind, maps);
+  return maps;
+}
+function groundDetailMaps() {
+  return layeredMaps(512, 512, ({ c, b, r }, w, h) => {
+    const random = seeded(1979);
+    c.fillStyle = '#e5e5e5'; c.fillRect(0, 0, w, h);
+    b.fillStyle = '#808080'; b.fillRect(0, 0, w, h);
+    r.fillStyle = '#e4e4e4'; r.fillRect(0, 0, w, h);
+    // Tiling turf blades, earth clods, and tiny pebbles for crisp close-up zoom.
+    for (let i = 0; i < 650; i++) {
+      const x = random() * w, y = random() * h, ang = random() * Math.PI * 2, len = 4 + random() * 10;
+      const bright = random() < .5;
+      wrapDraw(w, h, x, y, 14, (wx, wy) => {
+        b.strokeStyle = bright ? 'rgba(220,220,220,.42)' : 'rgba(42,42,42,.38)';
+        b.lineWidth = 1.5 + random() * 1.5;
+        b.beginPath(); b.moveTo(wx, wy); b.lineTo(wx + Math.cos(ang) * len, wy + Math.sin(ang) * len); b.stroke();
+        r.strokeStyle = bright ? 'rgba(205,205,205,.32)' : 'rgba(245,245,245,.32)';
+        r.lineWidth = 1.8;
+        r.beginPath(); r.moveTo(wx, wy); r.lineTo(wx + Math.cos(ang) * len, wy + Math.sin(ang) * len); r.stroke();
+      });
+    }
+    for (let i = 0; i < 240; i++) {
+      const x = random() * w, y = random() * h, rad = 1.2 + random() * 2.4;
+      wrapDraw(w, h, x, y, 6, (wx, wy) => {
+        b.fillStyle = 'rgba(235,235,235,.55)'; b.beginPath(); b.arc(wx, wy, rad, 0, Math.PI * 2); b.fill();
+        b.fillStyle = 'rgba(40,40,40,.45)'; b.beginPath(); b.arc(wx + 1, wy + 1, rad, 0, Math.PI * 2); b.fill();
+      });
+    }
+    speckle(b, w, h, 8000, random, 'rgba(195,195,195,.22)', 'rgba(65,65,65,.22)', 1.5);
+  }, {
+    wrapS: THREE.RepeatWrapping,
+    wrapT: THREE.RepeatWrapping,
+    repeat: [16, 24],
+    roughness: true,
+    bumpScale: .18,
+  });
+}
 function groundTexture(scale) {
   // Canvas x follows world x and canvas y follows world z across the 100×150 field.
   return paintedTexture(100 * scale, 150 * scale, (ctx, w, h) => {
     const random = seeded(1941), px = x => (x + 50) * scale, pz = z => (z + 75) * scale;
-    ctx.fillStyle = '#646c3d'; ctx.fillRect(0, 0, w, h);
-    const tones = ['123,130,74', '86,98,52', '139,134,82', '96,90,58', '74,88,46'];
-    for (let i = 0; i < 700; i++) blotch(ctx, random() * w, random() * h, (2 + random() * 7) * scale, tones[i % tones.length], .18 + random() * .22);
-    // Worn earth around both bases and along the road shoulders.
+    ctx.fillStyle = '#5e6638'; ctx.fillRect(0, 0, w, h);
+    const tones = ['118,125,68', '82,95,48', '134,129,76', '94,88,54', '68,84,42'];
+    for (let i = 0; i < 950; i++) blotch(ctx, random() * w, random() * h, (2.2 + random() * 7.5) * scale, tones[i % tones.length], .16 + random() * .2);
+    // Shaded woodland moss and loam under the outer forest flanks.
+    for (let i = 0; i < 360; i++) {
+      const side = random() < .5 ? -1 : 1;
+      blotch(ctx, px(side * (20 + random() * 29)), random() * h, (3 + random() * 6) * scale, random() < .6 ? '54,68,36' : '78,72,46', .24 + random() * .2);
+    }
+    // Worn earth staging around both bases and gravel footings under perimeter blast walls.
     for (const side of [-1, 1]) {
-      for (let i = 0; i < 70; i++) blotch(ctx, px((random() - .5) * 46), pz(side * (42 + (random() - .5) * 26)), (2 + random() * 4) * scale, '118,100,66', .22);
+      for (let i = 0; i < 110; i++) blotch(ctx, px((random() - .5) * 44), pz(side * (41 + (random() - .5) * 28)), (1.8 + random() * 4.2) * scale, '116,99,66', .22);
     }
-    for (let z = -56; z <= 56; z += 1.5) for (const side of [-1, 1]) {
-      blotch(ctx, px(side * (5 + random() * 1.6)), pz(z), (1 + random() * 1.4) * scale, '104,90,60', .35);
+    for (let z = -34; z <= 34; z += 1.5) for (const side of [-1, 1]) {
+      blotch(ctx, px(side * (18.8 + (random() - .5) * 1.4)), pz(z), (.9 + random() * 1.1) * scale, '112,102,76', .28);
     }
-    // Faint vehicle tracks wander across the contested middle.
+    // Graded crushed-gravel road verges and drainage rills.
+    for (let z = -56; z <= 56; z += .9) for (const side of [-1, 1]) {
+      blotch(ctx, px(side * (4.9 + random() * 1.7)), pz(z), (1.0 + random() * 1.4) * scale, random() < .55 ? '114,102,74' : '92,84,58', .36);
+    }
+    // Curved dual-track vehicle ruts along mining corridors and midfield.
     ctx.lineCap = 'round';
-    for (let i = 0; i < 12; i++) {
-      let x = (random() - .5) * 30, z = -32;
-      ctx.strokeStyle = `rgba(70,62,40,${.12 + random() * .1})`; ctx.lineWidth = .28 * scale;
-      for (const offset of [-.7, .7]) {
-        ctx.beginPath(); ctx.moveTo(px(x + offset), pz(z));
-        let tx = x, tz = z;
-        while (tz < 32) { tz += 4; tx += (random() - .5) * 3; ctx.lineTo(px(tx + offset), pz(tz)); }
+    for (let i = 0; i < 16; i++) {
+      const corridor = i < 8 ? (i % 2 ? 1 : -1) * (9 + random() * 9) : (random() - .5) * 26;
+      const zStart = -36 + random() * 8, zEnd = 28 + random() * 8;
+      for (const offset of [-.75, .75]) {
+        ctx.strokeStyle = `rgba(68,58,38,${.14 + random() * .1})`;
+        ctx.lineWidth = .32 * scale;
+        ctx.beginPath(); ctx.moveTo(px(corridor + offset), pz(zStart));
+        let tx = corridor, tz = zStart;
+        while (tz < zEnd) { tz += 3.5; tx += (random() - .5) * 2.4; ctx.lineTo(px(tx + offset), pz(tz)); }
         ctx.stroke();
       }
     }
-    speckle(ctx, w, h, w * h / 18, random, 'rgba(176,180,112,.22)', 'rgba(40,46,24,.25)', Math.max(1, scale / 6));
+    // Fine grass blade strokes and pebble flecks.
+    for (let i = 0; i < w * h / 42; i++) {
+      const gx = random() * w, gy = random() * h, ang = (random() - .5) * 1.4, len = (.14 + random() * .26) * scale;
+      ctx.strokeStyle = random() < .52 ? 'rgba(164,170,104,.25)' : 'rgba(46,56,28,.26)';
+      ctx.lineWidth = Math.max(1, scale * .07);
+      ctx.beginPath(); ctx.moveTo(gx, gy); ctx.lineTo(gx + Math.sin(ang) * len, gy - Math.cos(ang) * len); ctx.stroke();
+    }
+    speckle(ctx, w, h, w * h / 24, random, 'rgba(182,174,126,.2)', 'rgba(42,40,26,.22)', 1.2);
   });
 }
-function asphaltTexture() {
-  const texture = paintedTexture(128, 256, (ctx, w, h) => {
+function asphaltMaps() {
+  return layeredMaps(512, 2048, ({ c, b, r }, w, h) => {
     const random = seeded(77);
-    ctx.fillStyle = '#5f5e58'; ctx.fillRect(0, 0, w, h);
-    for (let i = 0; i < 18; i++) {
-      ctx.fillStyle = `rgba(${random() < .5 ? '40,40,38' : '120,118,108'},${.06 + random() * .08})`;
-      ctx.fillRect(random() * w, random() * h, 10 + random() * 40, 10 + random() * 50);
+    c.fillStyle = '#54534d'; c.fillRect(0, 0, w, h);
+    b.fillStyle = '#848484'; b.fillRect(0, 0, w, h);
+    r.fillStyle = '#dcdcdc'; r.fillRect(0, 0, w, h);
+    // Soft organic bitumen mottling wrapped seamlessly in Y (no boxy patches).
+    for (let i = 0; i < 120; i++) {
+      const x = random() * w, y = random() * h, rad = 32 + random() * 84;
+      const shade = random() < .5 ? '42,42,40' : '106,104,96';
+      wrapDraw(w, h, x, y, rad, (wx, wy) => blotch(c, wx, wy, rad, shade, .11));
     }
-    speckle(ctx, w, h, 9000, random, 'rgba(160,158,145,.35)', 'rgba(30,30,28,.35)');
-    ctx.strokeStyle = 'rgba(32,32,30,.55)'; ctx.lineWidth = 1;
-    for (let i = 0; i < 7; i++) {
-      let x = random() * w, y = random() * h; ctx.beginPath(); ctx.moveTo(x, y);
-      for (let j = 0; j < 6; j++) { x += (random() - .5) * 18; y += random() * 12; ctx.lineTo(x, y); }
-      ctx.stroke();
+    // Faint longitudinal center paving joint.
+    c.fillStyle = 'rgba(34,34,32,.22)'; c.fillRect(w * .5 - 1, 0, 2, h);
+    b.fillStyle = '#505050'; b.fillRect(w * .5 - 1, 0, 2, h);
+    // Polished dual wheel-track wear lanes in both traffic directions.
+    for (const lx of [w * .26, w * .38, w * .62, w * .74]) {
+      const grad = c.createLinearGradient(lx - 26, 0, lx + 26, 0);
+      grad.addColorStop(0, 'rgba(34,34,32,0)'); grad.addColorStop(.5, 'rgba(34,34,32,.2)'); grad.addColorStop(1, 'rgba(34,34,32,0)');
+      c.fillStyle = grad; c.fillRect(lx - 26, 0, 52, h);
+      const rGrad = r.createLinearGradient(lx - 24, 0, lx + 24, 0);
+      rGrad.addColorStop(0, 'rgba(145,145,145,0)'); rGrad.addColorStop(.5, 'rgba(145,145,145,.52)'); rGrad.addColorStop(1, 'rgba(145,145,145,0)');
+      r.fillStyle = rGrad; r.fillRect(lx - 24, 0, 48, h);
     }
-    // Darker edges where the asphalt meets the verge.
-    const edge = ctx.createLinearGradient(0, 0, w, 0);
-    edge.addColorStop(0, 'rgba(40,38,30,.5)'); edge.addColorStop(.12, 'rgba(40,38,30,0)');
-    edge.addColorStop(.88, 'rgba(40,38,30,0)'); edge.addColorStop(1, 'rgba(40,38,30,.5)');
-    ctx.fillStyle = edge; ctx.fillRect(0, 0, w, h);
-  });
-  texture.wrapT = THREE.RepeatWrapping; texture.repeat.set(1, 14);
-  return texture;
+    // Crushed mineral aggregate speckle across color, bump, and roughness.
+    for (let i = 0; i < 48000; i++) {
+      const x = random() * w, y = random() * h, light = random() < .5;
+      c.fillStyle = light ? 'rgba(168,166,154,.3)' : 'rgba(28,28,26,.32)'; c.fillRect(x, y, 1.1, 1.1);
+      b.fillStyle = light ? 'rgba(205,205,205,.34)' : 'rgba(52,52,52,.34)'; b.fillRect(x, y, 1.1, 1.1);
+      if (i % 4 === 0) { r.fillStyle = light ? 'rgba(120,120,120,.24)' : 'rgba(235,235,235,.22)'; r.fillRect(x, y, 1.1, 1.1); }
+    }
+    // Subtle hairline asphalt fractures starting near edges or center joint.
+    for (let i = 0; i < 16; i++) {
+      const fromEdge = i % 3 !== 0;
+      let x = fromEdge ? (random() < .5 ? 24 + random() * 42 : w - 24 - random() * 42) : w * .5 + (random() - .5) * 32;
+      let y = random() * h;
+      const dirX = fromEdge ? (x < w * .5 ? 1 : -1) : (random() < .5 ? 1 : -1);
+      const pts = [[x, y]];
+      const steps = 4 + Math.floor(random() * 4);
+      for (let j = 0; j < steps; j++) {
+        x += dirX * (5 + random() * 12);
+        y += (random() - .4) * 14;
+        pts.push([x, y]);
+      }
+      for (const oy of [0, -h, h]) {
+        c.strokeStyle = 'rgba(26,26,24,.32)'; c.lineWidth = 1;
+        b.strokeStyle = '#404040'; b.lineWidth = 1.2;
+        r.strokeStyle = '#757575'; r.lineWidth = 1.4;
+        for (const ctx of [c, b, r]) {
+          ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1] + oy);
+          for (let p = 1; p < pts.length; p++) ctx.lineTo(pts[p][0], pts[p][1] + oy);
+          ctx.stroke();
+        }
+      }
+    }
+    // Irregular dusty gravel shoulders softening the asphalt borders.
+    const edge = c.createLinearGradient(0, 0, w, 0);
+    edge.addColorStop(0, 'rgba(104,95,70,.72)'); edge.addColorStop(.06, 'rgba(84,76,56,.38)');
+    edge.addColorStop(.14, 'rgba(48,44,36,0)'); edge.addColorStop(.86, 'rgba(48,44,36,0)');
+    edge.addColorStop(.94, 'rgba(84,76,56,.38)'); edge.addColorStop(1, 'rgba(104,95,70,.72)');
+    c.fillStyle = edge; c.fillRect(0, 0, w, h);
+    for (let i = 0; i < 3200; i++) {
+      const side = random() < .5 ? 0 : w - 42;
+      const gx = side + random() * 42, gy = random() * h, sz = 1.2 + random() * 2.5;
+      c.fillStyle = random() < .5 ? 'rgba(128,116,84,.36)' : 'rgba(72,66,48,.32)';
+      c.fillRect(gx, gy, sz, sz);
+      b.fillStyle = 'rgba(190,190,190,.28)'; b.fillRect(gx, gy, sz, sz);
+    }
+  }, { wrapT: THREE.RepeatWrapping, repeat: [1, 3], roughness: true, bumpScale: .06 });
 }
-function apronTexture(scale) {
-  return paintedTexture(37 * scale, 19 * scale, (ctx, w, h) => {
+function apronMaps(scale) {
+  return layeredMaps(37 * scale, 19 * scale, ({ c, b, r }, w, h) => {
     const random = seeded(311);
-    ctx.fillStyle = '#939282'; ctx.fillRect(0, 0, w, h);
-    // Individual slabs are poured at slightly different shades.
+    c.fillStyle = '#929080'; c.fillRect(0, 0, w, h);
+    b.fillStyle = '#8c8c8c'; b.fillRect(0, 0, w, h);
+    r.fillStyle = '#e0e0e0'; r.fillRect(0, 0, w, h);
+    // Individual poured 3x3 concrete slabs with mix tone variation and broom finish.
     for (let x = -18.5; x < 18.5; x += 3) for (let z = -9.5; z < 9.5; z += 3) {
-      ctx.fillStyle = `rgba(${random() < .5 ? '170,168,150' : '110,108,96'},${random() * .16})`;
-      ctx.fillRect((x + 18.5) * scale, (z + 9.5) * scale, 3 * scale, 3 * scale);
+      const sx = (x + 18.5) * scale, sz = (z + 9.5) * scale, sw = 3 * scale;
+      const light = random() < .5;
+      c.fillStyle = `rgba(${light ? '168,166,148' : '108,106,94'},${random() * .18})`;
+      c.fillRect(sx, sz, sw, sw);
+      const bShade = 134 + Math.floor(random() * 14);
+      b.fillStyle = `rgb(${bShade},${bShade},${bShade})`;
+      b.fillRect(sx + 2, sz + 2, sw - 4, sw - 4);
+      // Faint moisture curing band inside each slab edge.
+      c.strokeStyle = 'rgba(72,70,60,.18)'; c.lineWidth = Math.max(2, scale * .22);
+      strokeBox(c, sx + 1, sz + 1, sw - 2, sw - 2);
     }
-    for (let i = 0; i < 26; i++) blotch(ctx, random() * w, random() * h, (.4 + random() * 1.6) * scale, '52,50,42', .18 + random() * .2);
-    speckle(ctx, w, h, w * h / 6, random, 'rgba(200,198,182,.25)', 'rgba(70,70,60,.25)');
-    ctx.strokeStyle = 'rgba(84,84,72,.85)'; ctx.lineWidth = Math.max(1, scale * .07);
-    for (let x = .5; x < 37; x += 3) { ctx.beginPath(); ctx.moveTo(x * scale, 0); ctx.lineTo(x * scale, h); ctx.stroke(); }
-    for (let z = 1.5; z < 19; z += 3) { ctx.beginPath(); ctx.moveTo(0, z * scale); ctx.lineTo(w, z * scale); ctx.stroke(); }
-    ctx.strokeStyle = 'rgba(60,58,50,.6)'; ctx.lineWidth = 2;
-    ctx.strokeRect(1, 1, w - 2, h - 2);
-  });
+    // Broom-finished brush lines across concrete surface.
+    for (let i = 0; i < 420; i++) {
+      const y = random() * h, x = random() * w, len = (1 + random() * 3) * scale;
+      c.fillStyle = random() < .5 ? 'rgba(205,202,186,.1)' : 'rgba(72,70,62,.1)'; c.fillRect(x, y, len, 1);
+      b.fillStyle = random() < .5 ? 'rgba(170,170,170,.22)' : 'rgba(105,105,105,.22)'; b.fillRect(x, y, len, 1);
+    }
+    // Hydraulic oil stains, soot patches, and specular grease puddles.
+    for (let i = 0; i < 36; i++) {
+      const x = random() * w, y = random() * h, rad = (.4 + random() * 1.5) * scale;
+      blotch(c, x, y, rad, '48,46,38', .18 + random() * .22);
+      blotch(r, x, y, rad, '108,108,108', .35 + random() * .25);
+    }
+    // Curved tire & track scuffs near the road entrance.
+    c.strokeStyle = 'rgba(42,40,36,.18)'; c.lineWidth = Math.max(1.5, scale * .14);
+    for (let i = 0; i < 8; i++) {
+      const cx = w * (.38 + random() * .24), cy = random() * h * .45;
+      c.beginPath(); c.arc(cx, cy, (2 + random() * 4) * scale, .2, 1.3 + random() * .7); c.stroke();
+    }
+    // Tight hairline concrete cracks originating near slab seams.
+    for (let i = 0; i < 18; i++) {
+      let x = (0.5 + Math.floor(random() * 12) * 3) * scale + (random() - .5) * .6 * scale;
+      let y = (1.5 + Math.floor(random() * 6) * 3) * scale + (random() - .5) * .6 * scale;
+      c.strokeStyle = 'rgba(58,56,48,.38)'; c.lineWidth = Math.max(1, scale * .035);
+      b.strokeStyle = '#383838'; b.lineWidth = Math.max(1, scale * .045);
+      c.beginPath(); b.beginPath(); c.moveTo(x, y); b.moveTo(x, y);
+      for (let s = 0; s < 4; s++) { x += (random() - .5) * .9 * scale; y += (random() - .5) * .9 * scale; c.lineTo(x, y); b.lineTo(x, y); }
+      c.stroke(); b.stroke();
+    }
+    speckle(c, w, h, w * h / 10, random, 'rgba(205,203,186,.24)', 'rgba(68,68,58,.24)');
+    speckle(b, w, h, w * h / 12, random, 'rgba(185,185,185,.22)', 'rgba(72,72,72,.22)');
+    // Recessed expansion joints with subtle inset corner tie plugs.
+    c.strokeStyle = 'rgba(72,72,62,.88)'; c.lineWidth = Math.max(1.5, scale * .09);
+    b.strokeStyle = '#181818'; b.lineWidth = Math.max(2, scale * .11);
+    r.strokeStyle = '#787878'; r.lineWidth = Math.max(1.5, scale * .09);
+    for (let x = .5; x < 37; x += 3) for (const ctx of [c, b, r]) { ctx.beginPath(); ctx.moveTo(x * scale, 0); ctx.lineTo(x * scale, h); ctx.stroke(); }
+    for (let z = 1.5; z < 19; z += 3) for (const ctx of [c, b, r]) { ctx.beginPath(); ctx.moveTo(0, z * scale); ctx.lineTo(w, z * scale); ctx.stroke(); }
+    const plugOff = Math.max(3, scale * .24);
+    for (let x = .5; x < 37; x += 3) for (let z = 1.5; z < 19; z += 3) {
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+        const px = x * scale + sx * plugOff, py = z * scale + sz * plugOff;
+        c.fillStyle = 'rgba(64,62,54,.45)'; c.beginPath(); c.arc(px, py, Math.max(1, scale * .05), 0, Math.PI * 2); c.fill();
+        b.fillStyle = '#383838'; b.beginPath(); b.arc(px, py, Math.max(1, scale * .055), 0, Math.PI * 2); b.fill();
+      }
+    }
+    c.strokeStyle = 'rgba(54,52,44,.7)'; c.lineWidth = 2.5;
+    strokeBox(c, 1, 1, w - 2, h - 2);
+  }, { roughness: true, bumpScale: .05 });
 }
 let blobTexture = null;
 function contactShadowMaterial() {
@@ -144,8 +786,9 @@ function contactShadow(width, depth) {
   m.userData.decoration = true;
   return m;
 }
-function texturedPlane(scene, w, d, x, y, z, map, roughness = .95) {
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshStandardMaterial({map, roughness, metalness: 0}));
+function texturedPlane(scene, w, d, x, y, z, maps, roughness = .95) {
+  const matOpts = maps?.isTexture ? { map: maps, roughness, metalness: 0 } : { ...maps, roughness, metalness: 0 };
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshStandardMaterial(matOpts));
   m.rotation.x = -Math.PI / 2; m.position.set(x, y, z); m.receiveShadow = true; scene.add(m); return m;
 }
 function scatter(scene, geometry, material, count, place, castShadow = false) {
@@ -161,18 +804,27 @@ function scatter(scene, geometry, material, count, place, castShadow = false) {
 function addEnvironment(scene, compact) {
   // A sunlit temperate battlefield: scrub, worn asphalt and concrete aprons.
   box(scene, 100, .6, 150, 0, -.5, 0, mat(0x5a6236));
-  texturedPlane(scene, 100, 150, 0, GROUND_Y, 0, groundTexture(compact ? 6 : 10));
-  texturedPlane(scene, 9, 110, 0, ROAD_Y, 0, asphaltTexture(), .9);
-  for (let z = -50; z <= 50; z += 5) {
-    box(scene, .15, .025, 2, 0, -.04, z, mat(0xc6b785));
-    for (const x of [-4.2, 4.2]) box(scene, .12, .025, 4.8, x, -.04, z, mat(0xaaa68b));
+  const detail = groundDetailMaps();
+  texturedPlane(scene, 100, 150, 0, GROUND_Y, 0, {
+    map: groundTexture(compact ? 8 : 16),
+    bumpMap: detail.bumpMap,
+    bumpScale: detail.bumpScale,
+    roughnessMap: detail.roughnessMap,
+  }, .98);
+  texturedPlane(scene, 9, 84, 0, ROAD_Y, 0, asphaltMaps(), .94);
+  const centerLine = mat(0xc6b785, 0, 0, .9, .04, 'roadLine');
+  const sideLine = mat(0xaaa68b, 0, 0, .9, .04, 'roadLine');
+  for (let z = -30; z <= 30; z += 5) {
+    box(scene, .15, .008, 2, 0, ROAD_Y + .005, z, centerLine, 0, .5);
+    for (const x of [-4.15, 4.15]) box(scene, .12, .008, 4.8, x, ROAD_Y + .005, z, sideLine, 0, .5);
   }
-  const apron = apronTexture(compact ? 12 : 20);
+  const apron = apronMaps(compact ? 14 : 24);
+  const apronHazard = mat(0xe3b437, 0, 0, .82, .16, 'hazard');
   for (const side of [-1, 1]) {
-    box(scene, 37, .15, 19, 0, -.04, side * 42, mat(0x7c7b6c));
-    const slab = texturedPlane(scene, 37, 19, 0, APRON_Y, side * 42, apron);
+    box(scene, 37, .15, 19, 0, -.04, side * 42, mat(0x7c7b6c, 0, 0, .94, .02, 'concrete'), 0, .4);
+    const slab = texturedPlane(scene, 37, 19, 0, APRON_Y, side * 42, apron, .95);
     if (side < 0) slab.rotation.z = Math.PI;
-    for (let x = -18; x <= 18; x += 3) box(scene, 1.5, .03, .45, x, .05, side * 32.8, mat(0xcbb457), -.45);
+    for (let x = -16.5; x <= 16.5; x += 3) box(scene, 2.2, .03, .38, x, .05, side * 32.75, apronHazard, 0, 1.0);
   }
   const random = seeded(1941);
   const outside = (x, z) => Math.abs(x) > 21 || Math.abs(z) > 54;
@@ -188,8 +840,8 @@ function addEnvironment(scene, compact) {
     color.setHSL(.24 + t.h * .06, .4 + t.h * .12, tint + t.h * .04);
     return true;
   };
-  const foliage = new THREE.MeshStandardMaterial({color: 0xffffff, roughness: .9, flatShading: true});
-  const trunkMat = new THREE.MeshStandardMaterial({color: 0xffffff, roughness: .92, flatShading: true});
+  const foliage = new THREE.MeshStandardMaterial({color: 0xffffff, roughness: .88, flatShading: true, ...finishMaps('foliage')});
+  const trunkMat = new THREE.MeshStandardMaterial({color: 0xffffff, roughness: .94, flatShading: true, ...finishMaps('bark')});
   const trunks = scatter(scene, new THREE.CylinderGeometry(.18, .3, 1.6, 5), trunkMat, trees.length, (transform, color, i) => {
     const t = trees[i];
     color.setHSL(.08, .32, .24 + t.h * .05); transform.position.set(t.x, .6 * t.s, t.z); transform.scale.setScalar(t.s); return true;
@@ -198,7 +850,7 @@ function addEnvironment(scene, compact) {
     scatter(scene, new THREE.ConeGeometry(1.75, 3.7, 7), foliage, trees.length, treeAt(2.7, .1), true),
     scatter(scene, new THREE.ConeGeometry(1.25, 2.8, 7), foliage, trees.length, treeAt(4.1, .14), true),
   ];
-  const stone = new THREE.MeshStandardMaterial({color: 0xffffff, roughness: .95, flatShading: true});
+  const stone = new THREE.MeshStandardMaterial({color: 0xffffff, roughness: .95, flatShading: true, ...finishMaps('stone')});
   scatter(scene, new THREE.DodecahedronGeometry(1), stone, 70, (transform, color) => {
     const x = (random() < .5 ? -1 : 1) * (20.5 + random() * 28), z = random() * 146 - 73;
     const size = .5 + random() * 1.1;
@@ -217,10 +869,12 @@ function addEnvironment(scene, compact) {
     transform.scale.set(size, size, size);
     color.setHSL(.16 + random() * .07, .45, .13 + random() * .07); tufts.push({x, z}); return true;
   });
+  const wallBody = mat(0xaaa28a, 0, 0, .94, .04, 'concrete');
+  const wallCap = mat(0xc0b89e, 0, 0, .86, .18, 'steel');
   for (const side of [-1, 1]) {
     for (let z = -29; z <= 29; z += 6) {
-      box(scene, .55, .7, 3.8, side * 18.8, .25, z, mat(0xaaa28a));
-      box(scene, .65, .12, 3.9, side * 18.8, .66, z, mat(0xc0b89e));
+      box(scene, .55, .7, 3.8, side * 18.8, .25, z, wallBody, 0, .45);
+      box(scene, .65, .12, 3.9, side * 18.8, .66, z, wallCap, 0, .45);
     }
   }
   // The plants that battle damage can burn, in instance order.
@@ -266,14 +920,31 @@ function createBreakableTracker() {
     if (mesh.material?.color) entry.color = mesh.material.color.getHex();
     return entry;
   };
-  const mergeGroup = (source, parent) => {
+  const mergeGroup = (source, parent, uvScale = .48) => {
     for (const [material, geometries] of source) {
-      const positions = [], normals = [], spans = [];
+      const positions = [], normals = [], uvs = [], spans = [];
       for (const geometry of geometries) {
         const pos = geometry.attributes.position.array;
         const start = positions.length / 3, count = pos.length / 3;
         positions.push(...pos);
         normals.push(...geometry.attributes.normal.array);
+        if (geometry.userData.hasUV && geometry.attributes.uv) {
+          uvs.push(...geometry.attributes.uv.array);
+        } else {
+          for (let i = 0; i < pos.length; i += 9) {
+            const ax = pos[i + 3] - pos[i], ay = pos[i + 4] - pos[i + 1], az = pos[i + 5] - pos[i + 2];
+            const bx = pos[i + 6] - pos[i], by = pos[i + 7] - pos[i + 1], bz = pos[i + 8] - pos[i + 2];
+            const nx = Math.abs(ay * bz - az * by);
+            const ny = Math.abs(az * bx - ax * bz);
+            const nz = Math.abs(ax * by - ay * bx);
+            for (let v = 0; v < 9; v += 3) {
+              const x = pos[i + v], y = pos[i + v + 1], z = pos[i + v + 2];
+              if (ny >= nx && ny >= nz) uvs.push(x * uvScale, z * uvScale);
+              else if (nx >= nz) uvs.push(z * uvScale, y * uvScale);
+              else uvs.push(x * uvScale, y * uvScale);
+            }
+          }
+        }
         const owner = geometry.userData.part;
         if (owner) {
           for (let i = 0; i < pos.length; i += 3) {
@@ -288,6 +959,7 @@ function createBreakableTracker() {
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
       geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+      geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
       geometry.computeBoundingSphere();
       const mesh = new THREE.Mesh(geometry, material);
       mesh.castShadow = true; mesh.receiveShadow = true; parent.add(mesh);
@@ -326,12 +998,15 @@ export function buildingMesh(b) {
   g.add(body);
   const accent = b.team === 'player' ? C.player : C.enemy;
   const darkAccent = b.team === 'player' ? C.playerDark : C.enemyDark;
-  const glow = mat(accent, accent, .35), armor = mat(b.team === 'player' ? 0xb3b09a : 0x9b9380), dark = mat(C.dark), edge = mat(darkAccent);
-  const steel = mat(0x999b8d), shadow = mat(0x4c5146), caution = mat(0xe1bd49);
+  const glow = mat(accent, accent, .04, .74, .24, 'trim'), armor = mat(b.team === 'player' ? 0xb3b09a : 0x9b9380, 0, 0, .80, .28, 'armor');
+  const dark = mat(C.dark, 0, 0, .88, .28, 'dark'), edge = mat(darkAccent, 0, 0, .76, .24, 'trim');
+  const steel = mat(0x999b8d, 0, 0, .58, .66, 'steel'), shadow = mat(0x4c5146, 0, 0, .88, .24, 'dark'), caution = mat(0xe1bd49, 0, 0, .8, .18, 'hazard');
   if (b.kind === 'emplacement') {
     body.rotation.y = 0;
-    cylinder(body, 1.7, 1.7, .3, 0, .2, 0, shadow, 12);
-    cylinder(body, .8, 1.15, .65, 0, .65, 0, dark, 12);
+    cylinder(body, 1.7, 1.7, .32, 0, .2, 0, mat(0x908e80, 0, 0, .94, .04, 'concrete'), 12);
+    cylinder(body, 1.74, 1.74, .12, 0, .22, 0, edge, 12);
+    box(body, .38, .31, .36, 0, .21, -1.54, glow);
+    cylinder(body, .8, 1.15, .65, 0, .65, 0, shadow, 12);
     box(body, 2.5, 1.25, .45, 0, 1.35, -.4, armor);
     tracker.attach('shield-trim', box(body, 2.55, .18, .5, 0, 2, -.4, glow));
     box(body, .34, .34, 3.5, 0, 1.8, -1.4, steel);
@@ -380,7 +1055,8 @@ export function buildingMesh(b) {
     cylinder(body, .65, .65, .25, -2, 5, 1, caution);
     box(body, 2.5, .5, 1.9, -.7, 3.1, -.7, shadow);
     for (let x = -1.5; x <= .2; x += .55) {
-      const chunk = new THREE.Mesh(new THREE.OctahedronGeometry(.48), mat(0xe5b64a));
+      const chunk = new THREE.Mesh(new THREE.OctahedronGeometry(.48), mat(0xe5b64a, 0x9a6512, .22, .42, .42, 'ore'));
+      chunk.geometry.userData.hasUV = true;
       chunk.position.set(x, 3.5, -.7); body.add(chunk);
     }
     box(body, 2.6, .13, .65, -.7, .55, -2.4, caution);
@@ -437,13 +1113,14 @@ export function buildingMesh(b) {
     mesh.updateMatrix();
     const geometry = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
     geometry.applyMatrix4(mesh.matrix);
+    if (mesh.geometry.userData.hasUV) geometry.userData.hasUV = true;
     if (mesh.userData.part) geometry.userData.part = mesh.userData.part;
     if (!parts.has(mesh.material)) parts.set(mesh.material, []);
     parts.get(mesh.material).push(geometry);
     mesh.geometry.dispose();
     body.remove(mesh);
   }
-  tracker.mergeGroup(parts, body);
+  tracker.mergeGroup(parts, body, .48);
   tracker.finish(g);
   const footprint = FOOTPRINTS[b.kind] || FOOTPRINTS.barracks;
   g.add(contactShadow(...footprint));
@@ -456,17 +1133,20 @@ export function unitMesh(u) {
   const part = tracker.part;
   const accent = u.team === 'player' ? C.player : C.enemy;
   const darkAccent = u.team === 'player' ? C.playerDark : C.enemyDark;
-  const glow = mat(accent, accent, .25), armor = mat(u.team === 'player' ? 0x8b9563 : 0xa09166), dark = mat(0x464c36);
-  const lamp = mat(0xffde8b, 0xffc861, 1.4);
-  const metal = mat(0x858777), pale = mat(0xd2ac7e), shadow = mat(0x292c25);
+  const glow = mat(accent, accent, .03, .72, .26, 'trim'), armor = mat(u.team === 'player' ? 0x8b9563 : 0xa09166, 0, 0, .80, .24, 'armor'), dark = mat(0x464c36, 0, 0, .88, .24, 'dark');
+  const lamp = mat(0xffde8b, 0xffc861, 1.4, .35, .1);
+  const metal = mat(0x858777, 0, 0, .58, .68, 'steel'), pale = mat(0xd2ac7e, 0, 0, .9, .02), shadow = mat(0x292c25, 0, 0, .9, .25, 'tread');
 
   // Combine the small armor pieces by material. Detailed models stay cheap to
   // draw even when both armies have many units on screen.
   // Parts go to the hull unless a turret is being assembled around its pivot.
+  const unitUvScale = ['tank', 'collector', 'demolition'].includes(u.kind) ? .85 : 1.15;
   const hull = new Map(), turret = new Map(), hopper = new Map(), pivotZ = -.1;
   let parts = hull;
   const addPart = (geometry, material, x, y, z, rx = 0, ry = 0, rz = 0) => {
+    const keepUV = !!geometry.userData.hasUV;
     const source = geometry.index ? geometry.toNonIndexed() : geometry;
+    if (keepUV) source.userData.hasUV = true;
     if (source !== geometry) geometry.dispose();
     source.applyMatrix4(new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(rx, ry, rz)));
     source.translate(x, parts === hopper ? y - 1.36 : y,
@@ -477,14 +1157,18 @@ export function unitMesh(u) {
   };
   const plate = (w, h, d, x, y, z, material, rx = 0, ry = 0, rz = 0) =>
     addPart(new THREE.BoxGeometry(w, h, d), material, x, y, z, rx, ry, rz);
-  const drum = (r1, r2, h, x, y, z, material, rx = 0, ry = 0, rz = 0, segments = 8) =>
-    addPart(new THREE.CylinderGeometry(r1, r2, h, segments), material, x, y, z, rx, ry, rz);
+  const drum = (r1, r2, h, x, y, z, material, rx = 0, ry = 0, rz = 0, segments = 8) => {
+    const geo = new THREE.CylinderGeometry(r1, r2, h, segments);
+    scaleCylinderUVs(geo, r1, r2, h, unitUvScale);
+    return addPart(geo, material, x, y, z, rx, ry, rz);
+  };
   // Each unit has its own silhouette: tracked harvester, drum-carrying truck,
   // twin-gun tank, light rifleman and an armored rocket trooper. Faction paint
   // is cool steel for the player and rust iron for the enemy, with bold stripes.
   const player = u.team === 'player';
-  const hullMat = mat(player ? 0x8c9aa1 : 0x86705a), hullDark = mat(player ? 0x56646c : 0x5a4636);
-  const stripe = mat(0xe8e2c8), glass = mat(0x1c2a33, 0x3d6f86, .35), hazard = mat(0xe3b437), rust = mat(0x3a2f27);
+  const hullMat = mat(player ? 0x839096 : 0x86705a, 0, 0, .78, .3, 'armor'), hullDark = mat(player ? 0x56646c : 0x5a4636, 0, 0, .82, .28, 'armor');
+  const stripe = mat(0xe8e2c8, 0, 0, .78, .16, 'trim'), glass = mat(0x1c2a33, 0x3d6f86, .35, .24, .45, 'glass');
+  const hazard = mat(0xe3b437, 0, 0, .8, .18, 'hazard'), rust = mat(0x3a2f27, 0, 0, .95, .14, 'rust');
   const track = (x, length, y, height, width, wheel) => {
     plate(width, height, length, x, y, 0, shadow);
     plate(width + .04, .08, length - .1, x, y + height / 2, 0, metal);
@@ -559,7 +1243,7 @@ export function unitMesh(u) {
     plate(2, .14, 2.5, 0, .95, .62, hullMat);
     for (const z of [-.25, .62, 1.5]) plate(1.5, .5, .2, 0, 1.2, z, hullDark);
     drum(.82, .82, 2.3, 0, 1.92, .62, hazard, Math.PI / 2, 0, 0, 14);
-    for (const z of [-.3, .62, 1.54]) drum(.86, .86, .16, 0, 1.92, z, z === .62 ? mat(0xb5301f, 0x5a0d05, .3) : rust, Math.PI / 2, 0, 0, 14);
+    for (const z of [-.3, .62, 1.54]) drum(.86, .86, .16, 0, 1.92, z, z === .62 ? mat(0xb5301f, 0x5a0d05, .3, .7, .25, 'trim') : rust, Math.PI / 2, 0, 0, 14);
     drum(.7, .7, .06, 0, 1.92, 1.79, metal, Math.PI / 2, 0, 0, 14);
     drum(.12, .12, .04, 0, 1.92, 1.83, rust, Math.PI / 2, 0, 0, 10);
     // Radiation trefoil on the rear cap.
@@ -609,7 +1293,7 @@ export function unitMesh(u) {
     parts = hull;
   } else if (u.kind === 'rocket') {
     // Armored rocket trooper: closed helmet with a glowing visor and a twin-tube pod.
-    const suit = mat(player ? 0x5f6b72 : 0x6b5a4a);
+    const suit = mat(player ? 0x5f6b72 : 0x6b5a4a, 0, 0, .88, .16, 'armor');
     for (const x of [-.22, .22]) {
       plate(.34, .62, .38, x, .46, 0, suit);
       part(x < 0 ? 'kneepad-l' : 'kneepad-r', () => plate(.36, .2, .2, x, .58, -.2, metal));
@@ -627,12 +1311,12 @@ export function unitMesh(u) {
     plate(.4, .11, .06, 0, 1.78, -.26, mat(0xffa040, 0xff7a20, 1.6));
     part('helmet-crest', () => plate(.52, .1, .52, 0, 2.03, 0, glow));
     // Launcher pod on the right shoulder, warheads visible from the front.
-    plate(.48, .42, 1.45, .66, 1.82, -.1, mat(0x55603c));
+    plate(.48, .42, 1.45, .66, 1.82, -.1, mat(0x55603c, 0, 0, .84, .22, 'armor'));
     part('pod-trim', () => plate(.06, .12, 1.1, .92, 1.85, -.05, glow));
     drum(.1, .14, .25, .66, 1.82, .72, shadow, Math.PI / 2);
     for (const y of [1.72, 1.92]) {
       drum(.12, .12, .06, .55 + (y > 1.8 ? .22 : 0), y, -.9, shadow, Math.PI / 2);
-      drum(.08, .08, .12, .55 + (y > 1.8 ? .22 : 0), y, -.9, mat(0xd8392a), Math.PI / 2);
+      drum(.08, .08, .12, .55 + (y > 1.8 ? .22 : 0), y, -.9, mat(0xd8392a, 0, 0, .6, .35, 'steel'), Math.PI / 2);
       drum(.12, .12, .06, .77 - (y > 1.8 ? .22 : 0), y, -.9, shadow, Math.PI / 2);
     }
     part('backpack', () => plate(.5, .5, .26, 0, 1.2, .36, dark));
@@ -654,19 +1338,19 @@ export function unitMesh(u) {
       drum(.34, .34, .05, 0, 1.69, 0, glow);
     }, { shape: 'helmet' });
     plate(.12, .14, .95, .22, 1.18, -.62, shadow);
-    plate(.13, .12, .32, .22, 1.18, -.2, mat(0x6e4930));
+    plate(.13, .12, .32, .22, 1.18, -.2, mat(0x6e4930, 0, 0, .88, .05, 'wood'));
     plate(.1, .2, .12, .22, 1.03, -.55, metal);
     drum(.04, .04, .45, .22, 1.2, -1.28, shadow, Math.PI / 2);
     plate(.2, .16, .16, .22, 1.2, -.85, pale);
   }
-  tracker.mergeGroup(hull, g);
+  tracker.mergeGroup(hull, g, unitUvScale);
   if (hopper.size) {
     const pivot = new THREE.Group(); pivot.position.set(0, 1.36, 1.88);
-    tracker.mergeGroup(hopper, pivot); g.add(pivot); g.userData.hopper = pivot;
+    tracker.mergeGroup(hopper, pivot, unitUvScale); g.add(pivot); g.userData.hopper = pivot;
   }
   if (turret.size) {
     const pivot = new THREE.Group(); pivot.position.z = pivotZ;
-    tracker.mergeGroup(turret, pivot); g.add(pivot); g.userData.turret = pivot;
+    tracker.mergeGroup(turret, pivot, unitUvScale); g.add(pivot); g.userData.turret = pivot;
   }
   tracker.finish(g);
   // Yaw last, so walking lean and suspension pitch follow the unit's heading.
@@ -744,7 +1428,7 @@ function oreMesh(deposit) {
   const group = new THREE.Group();
   // One instanced draw per field, with the same crystal pattern for each pair.
   if (!mats.has('ore')) {
-    mats.set('ore', new THREE.MeshStandardMaterial({color: 0xe0a734, roughness: .32, metalness: .35, emissive: 0x9a6512, emissiveIntensity: .45, flatShading: true}));
+    mats.set('ore', new THREE.MeshStandardMaterial({color: 0xe0a734, roughness: .42, metalness: .42, emissive: 0x9a6512, emissiveIntensity: .38, flatShading: true, ...finishMaps('ore')}));
     mats.set('ore-glow', new THREE.MeshBasicMaterial({map: (contactShadowMaterial(), blobTexture), color: 0xd8902a, transparent: true, opacity: .22, depthWrite: false, blending: THREE.AdditiveBlending}));
   }
   const glow = new THREE.Mesh(new THREE.PlaneGeometry(6.5, 6.5), mats.get('ore-glow'));
@@ -928,7 +1612,7 @@ export class BattlefieldRenderer {
         group.add(isUnit ? unitMesh(item) : buildingMesh(item));
         let cargo = null;
         if (isUnit && item.kind === 'collector') {
-          cargo = new CollectorCargo(group, mat(0xe5b64a, 0x9a6512, .25), item.cargo);
+          cargo = new CollectorCargo(group, mat(0xe5b64a, 0x9a6512, .25, .42, .42, 'ore'), item.cargo);
         }
         // A generous transparent target keeps individual soldiers easy to click.
         let hitTarget = null;
@@ -942,14 +1626,14 @@ export class BattlefieldRenderer {
         const list = (Math.random() < .5 ? -1 : 1) * (.07 + Math.random() * .04);
         const damage = new ModelDamage(group.children[0], profile, {
           soot: sooted,
-          rubble: mat(0xffffff),
-          bandage: mat(0xe2dbc8, 0, 0, .96, 0),
-          blood: mat(0x961816, 0, 0, .96, 0),
-          strap: mat(0x251d17, 0, 0, .96, 0),
-          splint: mat(0xb07d4b, 0, 0, .96, 0),
-          cavity: mat(0x161918, 0, 0, .96, 0),
-          scrapMetal: mat(0x5c6368, 0, 0, .45, .65),
-          wire: mat(0xd89634, 0x2ec8ff, .45, .5, .5),
+          rubble: mat(0xffffff, 0, 0, .94, .04, 'concrete'),
+          bandage: mat(0xe2dbc8, 0, 0, .96, 0, 'cloth'),
+          blood: mat(0x961816, 0, 0, .82, 0, 'cloth'),
+          strap: mat(0x251d17, 0, 0, .88, .08, 'tread'),
+          splint: mat(0xb07d4b, 0, 0, .92, 0, 'wood'),
+          cavity: mat(0x161918, 0, 0, .96, .1, 'dark'),
+          scrapMetal: mat(0x5c6368, 0, 0, .48, .68, 'steel'),
+          wire: mat(0xd89634, 0x2ec8ff, .45, .5, .5, 'tread'),
         }, { kind: item.kind, list });
         this.scene.add(group); entity = {group, selection, hp, hitTarget, cargo, damage, kind: item.kind, isUnit, selectable: false, recoilUntil: 0, emission: 0,
           sparkTimer: 0, nextSpark: .3 + Math.random() * .5, looseTimer: 0,

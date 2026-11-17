@@ -7,15 +7,72 @@ const random = (min, max) => min + Math.random() * (max - min);
 const clamp = value => Math.max(0, Math.min(1, value));
 
 function particleTexture(smoke) {
-  const canvas = document.createElement('canvas'); canvas.width = canvas.height = 64;
+  const size = 128, half = size / 2;
+  const canvas = document.createElement('canvas'); canvas.width = canvas.height = size;
   const ctx = canvas.getContext('2d');
-  const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
-  gradient.addColorStop(0, 'rgba(255,255,255,1)');
-  gradient.addColorStop(smoke ? .45 : .18, `rgba(255,255,255,${smoke ? .8 : .9})`);
-  gradient.addColorStop(smoke ? .8 : .55, 'rgba(255,255,255,.2)');
-  gradient.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = gradient; ctx.fillRect(0, 0, 64, 64);
+  let seed = smoke ? 109 : 211;
+  const next = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
+  const puff = (x, y, r, peak, mid) => {
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, `rgba(255,255,255,${peak})`);
+    g.addColorStop(.5, `rgba(255,255,255,${mid})`);
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  };
+  if (smoke) {
+    puff(half, half, half * .82, .62, .34);
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2 + next() * .4, d = (.1 + next() * .26) * size;
+      puff(half + Math.cos(a) * d, half + Math.sin(a) * d, (.18 + next() * .16) * size, .34 + next() * .18, .12);
+    }
+  } else {
+    puff(half, half, half * .96, 1, .35);
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2 + next() * .5, d = (.08 + next() * .16) * size;
+      puff(half + Math.cos(a) * d, half + Math.sin(a) * d, (.16 + next() * .12) * size, .55, .15);
+    }
+  }
   return new THREE.CanvasTexture(canvas);
+}
+
+function debrisGrainTextures() {
+  let seed = 313;
+  const next = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
+  const make = (paint, colorSpace) => {
+    const canvas = document.createElement('canvas'); canvas.width = canvas.height = 128;
+    paint(canvas.getContext('2d'), 128);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = colorSpace;
+    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+    return texture;
+  };
+  return {
+    map: make((ctx, s) => {
+      ctx.fillStyle = '#e8eae8'; ctx.fillRect(0, 0, s, s);
+      ctx.strokeStyle = 'rgba(54,56,54,.6)'; ctx.lineWidth = 2;
+      for (const p of [32, 96]) {
+        ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, s); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, p); ctx.lineTo(s, p); ctx.stroke();
+      }
+      for (let i = 0; i < 1100; i++) {
+        ctx.fillStyle = next() < .5 ? 'rgba(255,255,255,.2)' : 'rgba(52,54,50,.28)';
+        ctx.fillRect(next() * s, next() * s, 1 + next() * 2.5, 1 + next() * 2);
+      }
+    }, THREE.SRGBColorSpace),
+    bumpMap: make((ctx, s) => {
+      ctx.fillStyle = '#848484'; ctx.fillRect(0, 0, s, s);
+      ctx.strokeStyle = '#242424'; ctx.lineWidth = 2.5;
+      for (const p of [32, 96]) {
+        ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, s); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, p); ctx.lineTo(s, p); ctx.stroke();
+      }
+      for (let i = 0; i < 1300; i++) {
+        ctx.fillStyle = next() < .5 ? 'rgba(215,215,215,.32)' : 'rgba(40,40,40,.32)';
+        ctx.fillRect(next() * s, next() * s, 1 + next() * 2.5, 1 + next() * 2);
+      }
+    }, THREE.NoColorSpace),
+  };
 }
 
 function particleBatch(scene, capacity, smoke) {
@@ -114,7 +171,13 @@ export class CombatEffects {
     this.remains = [];
     this.shockwaves = [];
     this.arcs = [];
-    this.fallenMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: .86, metalness: .24 });
+    const grain = debrisGrainTextures();
+    this.fallenMap = grain.map;
+    this.fallenBump = grain.bumpMap;
+    this.fallenMaterial = new THREE.MeshStandardMaterial({
+      color: 0xffffff, roughness: .82, metalness: .3,
+      map: this.fallenMap, bumpMap: this.fallenBump, bumpScale: .055,
+    });
     const plateCap = compact ? 64 : 128, smallCap = compact ? 32 : 64;
     this.fallenBatches = {
       plate: makeFallenPool(new THREE.BoxGeometry(1, 1, 1), this.fallenMaterial, plateCap, this.scene),
@@ -643,6 +706,8 @@ export class CombatEffects {
       this.scene.remove(pool.mesh); pool.mesh.dispose(); pool.mesh.geometry.dispose();
     }
     this.fallenMaterial.dispose();
+    this.fallenMap.dispose();
+    this.fallenBump.dispose();
     for (const batch of [this.smoke, this.glow]) {
       this.scene.remove(batch.mesh); batch.mesh.dispose(); batch.mesh.geometry.dispose();
       batch.mesh.material.dispose(); batch.texture.dispose();
