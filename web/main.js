@@ -211,7 +211,33 @@ function ejectGarrisoned(id) {
   refresh();
   audio.play('select');
 }
-function setMode(mode) { if (!canCommand()) return; debugRecorder?.command('set_mode', { mode }, snapshot.time); game.set_mode(mode); selected.clear(); refresh(); audio.play(mode); }
+function setMode(mode) {
+  if (!canCommand()) return;
+  if (mode === 'gather' && snapshot?.mode === 'gather') {
+    const gathered = snapshot.units.filter(
+      u => u.team === 'player' && u.state === 'gather' && u.kind !== 'collector' && u.kind !== 'demolition',
+    );
+    if (gathered.length > 0) {
+      const healthy = gathered.filter(u => u.hp > u.max_hp * 0.5);
+      const healthySelected = healthy.length > 0 && selected.size === healthy.length && healthy.every(u => selected.has(u.id));
+      const allSelected = selected.size === gathered.length && gathered.every(u => selected.has(u.id));
+      selected.clear();
+      if (healthy.length > 0 && !healthySelected && !allSelected) {
+        for (const u of healthy) selected.add(u.id);
+      } else if (!allSelected) {
+        for (const u of gathered) selected.add(u.id);
+      }
+      refresh();
+      audio.play(selected.size ? 'select' : 'gather');
+      return;
+    }
+  }
+  debugRecorder?.command('set_mode', { mode }, snapshot.time);
+  game.set_mode(mode);
+  selected.clear();
+  refresh();
+  audio.play(mode);
+}
 function sendSelected() { if (!canCommand() || !selected.size) return; debugRecorder?.command('attack_selected', { ids: [...selected] }, snapshot.time); game.attack_selected(new Uint32Array([...selected])); selected.clear(); refresh(); audio.play('send'); }
 function onSelect(id, additive, touch) {
   if (!canCommand()) return;

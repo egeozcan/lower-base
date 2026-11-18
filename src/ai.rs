@@ -410,7 +410,8 @@ impl Game {
         let mut own = Force::default();
         let mut local = Force::default();
         let mut reserves = 0;
-        let mut attackers = 0;
+        let mut mobile_reserves = 0;
+        let mut attackers: usize = 0;
         let mut collectors = 0;
         let mut trucks = 0;
         let mut incoming_trucks = 0;
@@ -425,7 +426,10 @@ impl Game {
                     UnitKind::Collector => collectors += 1,
                     UnitKind::Demolition => (),
                     _ if matches!(u.state, UnitState::Gather | UnitState::Garrison) => {
-                        reserves += 1
+                        reserves += 1;
+                        if u.hp > u.max_hp * CRITICAL_HEALTH {
+                            mobile_reserves += 1;
+                        }
                     }
                     _ => attackers += 1,
                 }
@@ -553,6 +557,37 @@ impl Game {
         } else if retreating && !retreat {
             self.set_team_mode(team, Mode::Gather);
         }
+        // Recall disengaged Critical attackers still on our half of the map so
+        // they serve as rear-rank home fire-support instead of limping alone.
+        if !retreat && !threatened && can_rebuild && strategy != Strategy::Finish {
+            let enemies: Vec<(f32, f32)> = self
+                .units
+                .iter()
+                .filter(|u| u.team != team && u.on_field())
+                .map(|u| (u.x, u.z))
+                .collect();
+            let mut recalled_cripple = false;
+            for u in &mut self.units {
+                if u.team == team
+                    && COMBAT_KINDS.contains(&u.kind)
+                    && u.state == UnitState::Attack
+                    && u.hp <= u.max_hp * CRITICAL_HEALTH
+                    && u.z * direction < -5.0
+                    && !enemies
+                        .iter()
+                        .any(|&(ex, ez)| distance_sq(u.x, u.z, ex, ez) <= 14.0 * 14.0)
+                {
+                    u.state = UnitState::Gather;
+                    u.triaged = true;
+                    reserves += 1;
+                    attackers = attackers.saturating_sub(1);
+                    recalled_cripple = true;
+                }
+            }
+            if recalled_cripple {
+                self.update_rally_formation(team);
+            }
+        }
         // Send a waiting truck on its own once a strike is clearly worth it,
         // or at once to intercept an incoming wave. It also strikes enemies
         // that come near its post by itself.
@@ -602,22 +637,30 @@ impl Game {
                         && distance_sq(u.x, u.z, enemy.x, enemy.z) > u.kind.range().powi(2)
                 })
         });
+        let offensive_reserves = if threatened || !can_rebuild || strategy == Strategy::Finish {
+            reserves
+        } else {
+            mobile_reserves
+        };
         let launch = !retreat
             && (!recovering_rush || !can_rebuild)
-            && reserves > 0
+            && offensive_reserves > 0
             && ((threatened && advantage > 1.25 + aggression * 0.2)
                 || (threatened && defending_contact)
                 || !can_rebuild
                 || (wave <= 0.0
-                    && ((reserves >= group_size && advantage > 1.25 + aggression * 0.2)
-                        || (attackers >= 3 && reserves >= 1 && advantage > 1.2)
-                        || (advantage > 1.6 && reserves >= 3)
+                    && ((offensive_reserves >= group_size
+                        && advantage > 1.25 + aggression * 0.2)
+                        || (attackers >= 3 && offensive_reserves >= 1 && advantage > 1.2)
+                        || (advantage > 1.6 && offensive_reserves >= 3)
                         || (wave < -24.0 && advantage > 1.15)
                         // Equal armies must eventually contest the map. Vary the
                         // deadline, but never use it to charge an overwhelming
                         // force or abandon a base that is already under attack.
-                        || (!threatened && wave < -(18.0 + aggression * 12.0)
-                            && reserves >= group_size.max(6) && advantage > 0.85))));
+                        || (!threatened
+                            && wave < -(18.0 + aggression * 12.0)
+                            && offensive_reserves >= group_size.max(6)
+                            && advantage > 0.85))));
         // Delay rocket-heavy waves against an armored firing line. A lone
         // support rocket in a mixed assault does not need formation management.
         let screen_rockets = opposing.count[2] >= 3.0
@@ -636,6 +679,7 @@ impl Game {
             && advantage > 0.9
             && !retreat
             && !recovering_rush;
+        let commit_critical = threatened || !can_rebuild || strategy == Strategy::Finish;
         if launch || follow_screen {
             let ready: Vec<u32> = self
                 .units
@@ -644,18 +688,27 @@ impl Game {
                     u.team == team
                         && u.kind == UnitKind::Rocket
                         && u.state == UnitState::Gather
+                        && (commit_critical || u.hp > u.max_hp * CRITICAL_HEALTH)
                         && (!screen_rockets || rocket_ready(u, &self.units, launch))
                 })
                 .map(|u| u.id)
                 .collect();
+            let mut launched = false;
             for u in &mut self.units {
                 if u.team == team
                     && !matches!(u.kind, UnitKind::Collector | UnitKind::Demolition)
                     && u.state == UnitState::Gather
-                    && ((launch && u.kind != UnitKind::Rocket) || ready.contains(&u.id))
+                    && (((launch && u.kind != UnitKind::Rocket)
+                        && (commit_critical || u.hp > u.max_hp * CRITICAL_HEALTH))
+                        || ready.contains(&u.id))
                 {
                     u.state = UnitState::Attack;
+                    u.triaged = true;
+                    launched = true;
                 }
+            }
+            if launched {
+                self.update_rally_formation(team);
             }
         }
         if launch {
@@ -1655,5 +1708,78 @@ mod tests {
                 assert_eq!(g.credits, g.ai_credits);
             }
         }
+    }
+
+    #[test]
+    fn hard_and_medium_keep_critical_units_in_rear_reserve_and_recall_disengaged_cripples() {
+        for difficulty in [Difficulty::Medium, Difficulty::Hard] {
+            let mut g = Game::with_difficulty(26, difficulty);
+            g.units.clear();
+            g.ai_wave_timer = -10.0;
+            if difficulty == Difficulty::Hard {
+                g.hard_commanders[1].strategy = Strategy::Pressure;
+                g.hard_commanders[1].plan_until = 100.0;
+                g.hard_commanders[1].aggression = 0.5;
+            }
+            for _ in 0..6 {
+                g.spawn(Team::Enemy, UnitKind::Tank);
+                let u = g.units.last_mut().unwrap();
+                u.x = u.rally_x;
+                u.z = u.rally_z;
+            }
+            g.spawn(Team::Enemy, UnitKind::Tank);
+            let critical_id = {
+                let u = g.units.last_mut().unwrap();
+                u.hp = u.max_hp * 0.2;
+                u.x = u.rally_x;
+                u.z = u.rally_z;
+                u.id
+            };
+            g.ai_decide_for(Team::Enemy);
+            assert!(
+                g.units
+                    .iter()
+                    .filter(|u| u.team == Team::Enemy && u.id != critical_id)
+                    .all(|u| u.state == UnitState::Attack),
+                "{difficulty:?}: healthy reserves should attack"
+            );
+            let critical = g.units.iter().find(|u| u.id == critical_id).unwrap();
+            assert_eq!(
+                critical.state, UnitState::Gather,
+                "{difficulty:?}: critical unit should stay in rear reserve"
+            );
+        }
+
+        let mut g = Game::with_difficulty(26, Difficulty::Hard);
+        g.units.clear();
+        g.hard_commanders[1].strategy = Strategy::Pressure;
+        g.hard_commanders[1].plan_until = 100.0;
+        for _ in 0..4 {
+            g.spawn(Team::Enemy, UnitKind::Tank);
+            let u = g.units.last_mut().unwrap();
+            u.x = u.rally_x;
+            u.z = u.rally_z;
+        }
+        g.spawn(Team::Enemy, UnitKind::Tank);
+        let disengaged_id = {
+            let u = g.units.last_mut().unwrap();
+            u.hp = u.max_hp * 0.2;
+            u.state = UnitState::Attack;
+            u.x = 0.0;
+            u.z = -10.0;
+            u.id
+        };
+        for _ in 0..5 {
+            g.spawn(Team::Player, UnitKind::Tank);
+            let u = g.units.last_mut().unwrap();
+            u.x = u.rally_x;
+            u.z = 40.0;
+        }
+        g.ai_hard(Team::Enemy);
+        let disengaged = g.units.iter().find(|u| u.id == disengaged_id).unwrap();
+        assert_eq!(
+            disengaged.state, UnitState::Gather,
+            "disengaged critical attacker on own half should return to rear rally"
+        );
     }
 }

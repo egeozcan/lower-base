@@ -380,6 +380,8 @@ pub struct Unit {
     rally_x: f32,
     #[serde(skip)]
     rally_z: f32,
+    #[serde(skip)]
+    triaged: bool,
 }
 
 impl Unit {
@@ -894,7 +896,11 @@ impl Game {
             deposit: None,
             rally_x,
             rally_z,
+            triaged: state == UnitState::Attack,
         });
+        if !matches!(kind, UnitKind::Collector | UnitKind::Demolition) {
+            self.update_rally_formation(team);
+        }
     }
     pub fn set_mode(&mut self, mode: &str) {
         if self.demo || self.outcome != Outcome::Playing {
@@ -936,14 +942,21 @@ impl Game {
                 }
             }
             if u.kind != UnitKind::Collector {
-                if mode == Mode::Attack {
+                if mode == Mode::Attack && u.state != UnitState::Attack {
                     u.state = UnitState::Attack;
+                    if u.kind != UnitKind::Demolition {
+                        u.triaged = true;
+                    }
                 }
                 if mode == Mode::Retreat {
+                    if u.state == UnitState::Attack && u.kind != UnitKind::Demolition {
+                        u.triaged = true;
+                    }
                     u.state = UnitState::Gather;
                 }
             }
         }
+        self.update_rally_formation(team);
         self.resolve_collisions();
     }
     pub fn eject_garrisoned(&mut self, id: u32) {
@@ -956,6 +969,7 @@ impl Game {
             return;
         };
         if deploy_garrisoned_unit(unit, &self.buildings, self.mode) {
+            self.update_rally_formation(Team::Player);
             self.resolve_collisions();
         }
     }
@@ -964,10 +978,18 @@ impl Game {
         if self.demo || self.outcome != Outcome::Playing || self.mode == Mode::Retreat {
             return;
         }
+        let mut changed = false;
         for u in &mut self.units {
             if u.team == Team::Player && u.state == UnitState::Gather && ids.contains(&u.id) {
                 u.state = UnitState::Attack;
+                if !matches!(u.kind, UnitKind::Collector | UnitKind::Demolition) {
+                    u.triaged = true;
+                    changed = true;
+                }
             }
+        }
+        if changed {
+            self.update_rally_formation(Team::Player);
         }
     }
     pub fn train(&mut self, kind: &str) {
@@ -1093,6 +1115,8 @@ impl Game {
         self.resolve_collisions();
         self.units.retain(|u| u.hp > 0.0);
         self.buildings.retain(|b| b.hp > 0.0);
+        self.update_rally_formation(Team::Player);
+        self.update_rally_formation(Team::Enemy);
         if !self.alive_building(Team::Player, BuildingKind::Barracks) {
             self.barracks_queue.clear();
             self.barracks_progress = 0.0;
@@ -1352,6 +1376,16 @@ impl Game {
                     && matches!(u.state, UnitState::Gather | UnitState::Garrison)
             })
             .count();
+        let mobile_reserves = self
+            .units
+            .iter()
+            .filter(|u| {
+                u.team == team
+                    && !matches!(u.kind, UnitKind::Collector | UnitKind::Demolition)
+                    && matches!(u.state, UnitState::Gather | UnitState::Garrison)
+                    && u.hp > u.max_hp * CRITICAL_HEALTH
+            })
+            .count();
         // Opposing guns cover their approach: gather a larger wave before
         // marching into them, and add rifles, which damage guns the most.
         let opposing_guns = self
@@ -1362,14 +1396,25 @@ impl Game {
         if !should_retreat
             && (threatened
                 || (wave_timer <= 0.0
-                    && (reserves >= 3 + opposing_guns * 2
-                        || wave_timer <= -4.0 - opposing_guns as f32 * 4.0)))
+                    && (mobile_reserves >= 3 + opposing_guns * 2
+                        || (wave_timer <= -4.0 - opposing_guns as f32 * 4.0
+                            && (mobile_reserves > 0 || (!can_rebuild && reserves > 0))))))
         {
+            let commit_critical = threatened || !can_rebuild || mobile_reserves == 0;
+            let mut launched = false;
             for u in &mut self.units {
-                if u.team == team && u.kind != UnitKind::Demolition && u.state == UnitState::Gather
+                if u.team == team
+                    && !matches!(u.kind, UnitKind::Collector | UnitKind::Demolition)
+                    && u.state == UnitState::Gather
+                    && (commit_critical || u.hp > u.max_hp * CRITICAL_HEALTH)
                 {
                     u.state = UnitState::Attack;
+                    u.triaged = true;
+                    launched = true;
                 }
+            }
+            if launched {
+                self.update_rally_formation(team);
             }
             let next_wave = if threatened { 7.0 } else { 9.0 };
             if team == Team::Enemy {
@@ -1712,9 +1757,9 @@ impl Game {
                 })
                 .max_by(|(_, a), (_, b)| {
                     let score = |v: &Unit| {
-                        fire_preference(
+                        unit_fire_preference(
                             unit.kind,
-                            v.kind,
+                            v,
                             distance_sq(unit.x, unit.z, v.x, v.z).sqrt(),
                         )
                     };
@@ -1766,21 +1811,62 @@ impl Game {
                 self.next_shot_id += 1;
                 unit.cooldown = unit.kind.interval();
             } else if !unit_in_range && !building_in_range {
-                let destination = if unit.state == UnitState::Gather {
-                    Some((unit.rally_x, unit.rally_z))
-                } else if nearest_unit_distance <= nearest_building_distance {
-                    target_unit.map(|(j, _)| (snapshot[j].x, snapshot[j].z))
+                let direction = if unit.team == Team::Player { 1.0 } else { -1.0 };
+                let engaged_enemy = if unit.state == UnitState::Gather
+                    && unit.rally_z * direction > 27.5
+                    && unit.z * direction >= 24.0
+                {
+                    snapshot
+                        .iter()
+                        .filter(|enemy| {
+                            enemy.team != unit.team
+                                && enemy.on_field()
+                                && matches!(
+                                    enemy.kind,
+                                    UnitKind::Soldier | UnitKind::Rocket | UnitKind::Tank
+                                )
+                                && enemy.z * direction >= 14.0
+                                && enemy.z * direction + range >= 27.0
+                                && snapshot.iter().any(|ally| {
+                                    ally.team == unit.team
+                                        && ally.on_field()
+                                        && ally.state == UnitState::Gather
+                                        && !matches!(
+                                            ally.kind,
+                                            UnitKind::Collector | UnitKind::Demolition
+                                        )
+                                        && distance_sq(ally.x, ally.z, enemy.x, enemy.z)
+                                            <= (enemy.kind.range() + 0.5).powi(2)
+                                })
+                        })
+                        .min_by(|a, b| {
+                            distance_sq(unit.x, unit.z, a.x, a.z)
+                                .total_cmp(&distance_sq(unit.x, unit.z, b.x, b.z))
+                        })
+                        .map(|enemy| (enemy.x, enemy.z))
                 } else {
-                    target_building.map(|(j, _)| (buildings[j].x, buildings[j].z))
+                    None
+                };
+                let (destination, stop) = if let Some((ex, ez)) = engaged_enemy {
+                    if (unit.x - ex).abs() > range * 0.3 {
+                        (Some((ex, unit.rally_z)), 1.5)
+                    } else {
+                        (Some((ex, ez)), range * 0.95)
+                    }
+                } else if unit.state == UnitState::Gather {
+                    (Some((unit.rally_x, unit.rally_z)), 0.15)
+                } else if nearest_unit_distance <= nearest_building_distance {
+                    (
+                        target_unit.map(|(j, _)| (snapshot[j].x, snapshot[j].z)),
+                        range * 0.95,
+                    )
+                } else {
+                    (
+                        target_building.map(|(j, _)| (buildings[j].x, buildings[j].z)),
+                        building_range * 0.95,
+                    )
                 };
                 if let Some((x, z)) = destination {
-                    let stop = if unit.state == UnitState::Gather {
-                        0.15
-                    } else if nearest_unit_distance <= nearest_building_distance {
-                        range * 0.95
-                    } else {
-                        building_range * 0.95
-                    };
                     let right_of_way = if unit.state == UnitState::Gather {
                         navigation::RightOfWay::Regroup
                     } else {
@@ -1899,6 +1985,9 @@ impl Game {
         }
         for (u, damage) in self.units.iter_mut().zip(unit_damage) {
             u.hp -= damage;
+            if u.hp > 0.0 && u.hp < u.max_hp {
+                u.triaged = true;
+            }
         }
         for (b, damage) in self.buildings.iter_mut().zip(building_damage) {
             b.hp -= damage;
@@ -1929,6 +2018,9 @@ impl Game {
             for u in &mut self.units {
                 if u.on_field() {
                     u.hp -= demolition_damage(distance_sq(x, z, u.x, u.z).sqrt());
+                    if u.hp > 0.0 && u.hp < u.max_hp {
+                        u.triaged = true;
+                    }
                 }
             }
             for b in &mut self.buildings {
@@ -1989,6 +2081,7 @@ fn deploy_garrisoned_unit(unit: &mut Unit, buildings: &[Building], mode: Mode) -
     } else {
         UnitState::Gather
     };
+    unit.triaged = true;
     unit.navigation = navigation::Navigation::default();
     true
 }
@@ -2096,6 +2189,90 @@ fn emplacement_damage(kind: UnitKind) -> f32 {
 /// slightly favoring nearer targets.
 fn fire_preference(shooter: UnitKind, target: UnitKind, distance: f32) -> f32 {
     shooter.damage(Some(target)) / (1.0 + distance / shooter.range() * 0.3)
+}
+
+/// Focus fire onto visibly Damaged or Critical targets within the same class
+/// without overriding rock-paper-scissors counter priorities.
+fn unit_fire_preference(shooter: UnitKind, target: &Unit, distance: f32) -> f32 {
+    let health = (target.hp / target.max_hp).clamp(0.0, 1.0);
+    let finish = if health <= DAMAGED_HEALTH {
+        1.0 + (1.0 - health) * 0.15
+    } else {
+        1.0
+    };
+    fire_preference(shooter, target.kind, distance) * finish
+}
+
+fn triage_tier(u: &Unit) -> u8 {
+    if u.state == UnitState::Garrison {
+        return 9;
+    }
+    let health = (u.hp / u.max_hp).clamp(0.0, 1.0);
+    if health > DAMAGED_HEALTH {
+        match u.kind {
+            UnitKind::Tank => 0,
+            UnitKind::Soldier => 1,
+            UnitKind::Rocket => 2,
+            _ => 9,
+        }
+    } else if health > CRITICAL_HEALTH {
+        match u.kind {
+            UnitKind::Tank => 3,
+            UnitKind::Rocket => 4,
+            UnitKind::Soldier => 5,
+            _ => 9,
+        }
+    } else {
+        match u.kind {
+            UnitKind::Tank => 6,
+            UnitKind::Rocket => 7,
+            UnitKind::Soldier => 8,
+            _ => 9,
+        }
+    }
+}
+
+impl Game {
+    fn update_rally_formation(&mut self, team: Team) {
+        let mut indices: Vec<usize> = self
+            .units
+            .iter()
+            .enumerate()
+            .filter(|(_, u)| {
+                u.team == team
+                    && u.hp > 0.0
+                    && !matches!(u.kind, UnitKind::Collector | UnitKind::Demolition)
+                    && matches!(u.state, UnitState::Gather | UnitState::Garrison)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if indices.len() <= 1
+            || !self
+                .units
+                .iter()
+                .any(|u| u.team == team && u.hp > 0.0 && u.triaged)
+        {
+            return;
+        }
+        indices.sort_by(|&a, &b| {
+            triage_tier(&self.units[a])
+                .cmp(&triage_tier(&self.units[b]))
+                .then_with(|| self.units[a].id.cmp(&self.units[b].id))
+        });
+        let direction = if team == Team::Player { 1.0 } else { -1.0 };
+        for (row, chunk) in indices.chunks_mut(7).enumerate() {
+            chunk.sort_by(|&a, &b| {
+                self.units[a]
+                    .x
+                    .total_cmp(&self.units[b].x)
+                    .then_with(|| self.units[a].id.cmp(&self.units[b].id))
+            });
+            for (col, &i) in chunk.iter().enumerate() {
+                self.units[i].rally_x = (col as f32 - 3.0) * 3.4;
+                self.units[i].rally_z = direction * (27.0 + (row.min(3) as f32) * 2.2);
+            }
+        }
+    }
 }
 
 // Guns prefer armor; within a class, the nearest target.
@@ -4051,5 +4228,205 @@ mod tests {
         g.train("tank");
         assert!(g.factory_queue.is_empty());
         assert_eq!(g.credits, 500.0);
+    }
+
+    #[test]
+    fn triage_rally_formation_places_wounded_and_critical_units_behind_healthy_screen() {
+        let mut g = Game::new();
+        g.units.clear();
+        g.ai_decision_timer = f32::INFINITY;
+        for team in [Team::Player, Team::Enemy] {
+            let sign = if team == Team::Player { 1.0 } else { -1.0 };
+            let specs = [
+                (UnitKind::Soldier, 0.2),
+                (UnitKind::Rocket, 0.2),
+                (UnitKind::Tank, 0.2),
+                (UnitKind::Rocket, 0.4),
+                (UnitKind::Rocket, 1.0),
+                (UnitKind::Soldier, 1.0),
+                (UnitKind::Soldier, 1.0),
+                (UnitKind::Soldier, 1.0),
+                (UnitKind::Tank, 1.0),
+                (UnitKind::Tank, 1.0),
+            ];
+            for (i, (kind, health)) in specs.into_iter().enumerate() {
+                g.spawn(team, kind);
+                let u = g.units.last_mut().unwrap();
+                u.hp = u.max_hp * health;
+                u.x = (i as f32 - 4.5) * 2.5;
+                u.z = sign * 28.0;
+            }
+            g.set_team_mode(team, Mode::Attack);
+            g.set_team_mode(team, Mode::Retreat);
+        }
+        let slots = |team: Team| {
+            let mut list: Vec<_> = g
+                .units
+                .iter()
+                .filter(|u| u.team == team)
+                .map(|u| (u.rally_x, u.rally_z.abs(), u.hp / u.max_hp))
+                .collect();
+            list.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
+            list
+        };
+        let player_slots = slots(Team::Player);
+        let enemy_slots = slots(Team::Enemy);
+        assert_eq!(player_slots, enemy_slots, "triage must stay symmetric");
+        let unique: std::collections::HashSet<(i32, i32)> = player_slots
+            .iter()
+            .map(|(x, z, _)| ((x * 100.0).round() as i32, (z * 100.0).round() as i32))
+            .collect();
+        assert_eq!(unique.len(), 10, "each unit needs a distinct rally slot");
+        for u in &g.units {
+            let health = u.hp / u.max_hp;
+            if health <= CRITICAL_HEALTH {
+                assert!(
+                    (u.rally_z.abs() - 29.2).abs() < 0.01,
+                    "critical unit {:?} should sit in rear row, got {}",
+                    u.kind,
+                    u.rally_z
+                );
+            } else {
+                assert!(
+                    (u.rally_z.abs() - 27.0).abs() < 0.01,
+                    "front/support unit {:?} ({health}) should sit in row 0, got {}",
+                    u.kind,
+                    u.rally_z
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rear_rank_defenders_step_into_firing_range_when_front_line_is_engaged() {
+        let mut game = Game::with_seed(26);
+        game.units.clear();
+        game.ai_decision_timer = f32::INFINITY;
+        game.build_emplacement_for(Team::Player, 0);
+        for b in &mut game.buildings {
+            b.construction_remaining = 0.0;
+        }
+        for _ in 0..12 {
+            game.spawn(Team::Player, UnitKind::Soldier);
+            let u = game.units.last_mut().unwrap();
+            u.x = u.rally_x;
+            u.z = u.rally_z;
+        }
+        for _ in 0..12 {
+            game.spawn(Team::Enemy, UnitKind::Soldier);
+            let u = game.units.last_mut().unwrap();
+            u.x = u.rally_x;
+            u.z = u.rally_z;
+            u.state = UnitState::Attack;
+        }
+        let mut saw_rear_step_up = false;
+        for _ in 0..1200 {
+            game.update(0.05);
+            if game
+                .units
+                .iter()
+                .any(|u| u.team == Team::Player && u.rally_z > 27.5 && u.z < 28.5)
+            {
+                saw_rear_step_up = true;
+            }
+            let enemy_alive = game.units.iter().any(|u| u.team == Team::Enemy && u.hp > 0.0);
+            let player_alive = game.units.iter().any(|u| u.team == Team::Player && u.hp > 0.0);
+            if !enemy_alive || !player_alive {
+                break;
+            }
+        }
+        assert!(
+            saw_rear_step_up,
+            "rear-rank defenders must step up when row 0 is engaged"
+        );
+        let value = |team: Team| -> f32 {
+            game.units
+                .iter()
+                .filter(|u| u.team == team && u.hp > 0.0)
+                .map(|u| u.kind.cost() * u.hp / u.max_hp)
+                .sum()
+        };
+        assert!(
+            value(Team::Player) > value(Team::Enemy),
+            "gun-backed 12-rifle defender should hold: player {}, enemy {}",
+            value(Team::Player),
+            value(Team::Enemy)
+        );
+    }
+
+    #[test]
+    fn focus_fire_prefers_damaged_and_critical_targets_without_flipping_counters() {
+        let mut g = isolated_units(&[
+            (Team::Player, UnitKind::Tank, 0.0, 0.0),
+            (Team::Enemy, UnitKind::Tank, -2.0, -9.0),
+            (Team::Enemy, UnitKind::Tank, 2.0, -9.0),
+        ]);
+        let shooter_id = g.units[0].id;
+        let damaged_id = g.units[1].id;
+        g.units[1].hp = UnitKind::Tank.health() * 0.5;
+        g.combat_and_move(0.05);
+        let player_shot = g
+            .shots
+            .iter()
+            .find(|s| s.source_id == shooter_id)
+            .expect("tank should fire");
+        assert_eq!(player_shot.target_id, damaged_id);
+
+        let mut g = isolated_units(&[
+            (Team::Player, UnitKind::Tank, 0.0, 0.0),
+            (Team::Enemy, UnitKind::Tank, -2.0, -9.0),
+            (Team::Enemy, UnitKind::Soldier, 2.0, -9.0),
+        ]);
+        let shooter_id = g.units[0].id;
+        let soldier_id = g.units[2].id;
+        g.units[1].hp = 1.0;
+        g.combat_and_move(0.05);
+        let player_shot = g
+            .shots
+            .iter()
+            .find(|s| s.source_id == shooter_id)
+            .expect("tank should fire");
+        assert_eq!(
+            player_shot.target_id, soldier_id,
+            "focus fire must not override rock-paper-scissors counter priority"
+        );
+    }
+
+    #[test]
+    fn sheltered_garrison_units_do_not_displace_active_gather_defenders_from_row_zero() {
+        let mut g = Game::new();
+        g.units.clear();
+        g.ai_decision_timer = f32::INFINITY;
+        for _ in 0..4 {
+            g.spawn(Team::Player, UnitKind::Tank);
+            let u = g.units.last_mut().unwrap();
+            u.hp = u.max_hp * 0.4;
+        }
+        g.set_mode("attack");
+        g.set_mode("retreat");
+        for _ in 0..7 {
+            g.spawn(Team::Player, UnitKind::Tank);
+        }
+        g.update(0.05);
+        assert!(
+            g.units
+                .iter()
+                .filter(|u| u.state == UnitState::Gather)
+                .all(|u| (u.rally_z - 27.0).abs() < 0.01),
+            "field defenders must keep row 0 while healthy reinforcements remain sheltered"
+        );
+        g.set_mode("gather");
+        assert_eq!(
+            g.units
+                .iter()
+                .filter(|u| {
+                    u.state == UnitState::Gather
+                        && (u.rally_z - 27.0).abs() < 0.01
+                        && u.hp == u.max_hp
+                })
+                .count(),
+            7,
+            "releasing sheltered healthy tanks promotes them into row 0"
+        );
     }
 }
