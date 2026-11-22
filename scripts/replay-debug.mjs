@@ -20,6 +20,7 @@ try {
       const { action, args } = report.commands[nextCommand++];
       if (action === 'train') game.train(args.kind);
       else if (action === 'build_emplacement') game.build_emplacement(args.slot);
+      else if (action === 'build_pad') game.build_pad(args.kind);
       else if (action === 'construct') game.construct(args.kind);
       else if (action === 'cancel_training') game.cancel_training(args.building, args.index);
       else if (action === 'eject_garrisoned') game.eject_garrisoned(args.id);

@@ -880,7 +880,7 @@ function addEnvironment(scene, compact) {
   // The plants that battle damage can burn, in instance order.
   return { grass: { meshes: [grass], spots: tufts }, trees: { trunks, meshes: canopies, spots: trees } };
 }
-const FOOTPRINTS = {command: [9.4, 8.6], refinery: [9.2, 7.6], factory: [8.4, 8], barracks: [7.6, 7.2], emplacement: [4.6, 4.6]};
+const FOOTPRINTS = {command: [9.4, 8.6], refinery: [9.2, 7.6], factory: [8.4, 8], barracks: [7.6, 7.2], emplacement: [4.6, 4.6], ore_depot: [4.6, 4.6]};
 // An empty Standard site: corner brackets around the structure's footprint.
 function siteMarker(site) {
   const marker = new THREE.Group();
@@ -1012,6 +1012,28 @@ export function buildingMesh(b) {
     box(body, .34, .34, 3.5, 0, 1.8, -1.4, steel);
     tracker.attach('muzzle', box(body, .55, .5, .7, 0, 1.8, -3.1, dark), { shape: 'rod', protruding: true });
     for (const x of [-.8, .8]) tracker.attach(x < 0 ? 'strut-l' : 'strut-r', box(body, .3, .25, 2.1, x, .5, .7, edge, x * .3), { shape: 'rod' });
+  } else if (b.kind === 'ore_depot') {
+    const concrete = mat(0x908e80, 0, 0, .94, .04, 'concrete');
+    const localFlank = ((b.x ?? 7) >= 0 ? 1 : -1) * (b.team === 'enemy' ? -1 : 1);
+    // Concrete pad plinth and curb, open industrial hopper bay, outer-flank chute, and rear discharge tunnel.
+    box(body, 3.7, .28, 3.7, 0, .14, 0, concrete);
+    box(body, 3.76, .1, 3.76, 0, .24, 0, edge);
+    box(body, 2.0, .22, 2.0, 0, .4, 0, dark);
+    box(body, .34, 1.35, 2.45, -localFlank * 1.12, 1.0, 0, armor);
+    box(body, .38, .16, 2.48, -localFlank * 1.12, 1.72, 0, steel);
+    box(body, .3, 1.05, 2.35, localFlank * 1.12, .85, 0, armor);
+    box(body, 2.58, 1.45, .34, 0, 1.05, -1.12, armor);
+    box(body, 2.62, .16, .38, 0, 1.82, -1.12, steel);
+    box(body, 2.58, 1.25, .34, 0, .95, 1.12, shadow);
+    box(body, .95, .22, 2.3, localFlank * 1.68, .24, 0, dark);
+    box(body, .22, .12, 2.3, localFlank * 2.05, .38, 0, caution);
+    box(body, 1.2, .65, .72, 0, .55, 1.48, shadow);
+    box(body, 1.24, .14, .76, 0, .92, 1.48, glow);
+    tracker.attach('chute-hood', box(body, .42, .22, 1.85, localFlank * 1.35, 1.48, 0, steel), { protruding: true });
+    tracker.attach('hopper-trim', box(body, 2.66, .2, .38, 0, 1.94, -1.12, glow));
+    tracker.attach('strut-l', box(body, .24, 1.15, .36, -1.32, .88, -.65, edge, .25), { shape: 'rod' });
+    tracker.attach('strut-r', box(body, .24, 1.15, .36, 1.32, .88, .65, edge, -.25), { shape: 'rod' });
+    tracker.attach('motor-box', box(body, .95, .62, .56, -localFlank * .65, .72, 1.48, edge));
   } else if (b.kind === 'command') {
     // A stepped headquarters with a raised reactor and communications crown.
     box(body, 7.3, .52, 6.6, 0, .28, 0, dark);
@@ -1122,6 +1144,32 @@ export function buildingMesh(b) {
   }
   tracker.mergeGroup(parts, body, .48);
   tracker.finish(g);
+  if (b.kind === 'ore_depot') {
+    // Cloned material prevents wreck decoration cleanup from disposing the shared cached ore material.
+    const oreMat = mat(0xe5b64a, 0x9a6512, .25, .42, .42, 'ore').clone();
+    const orePile = new THREE.InstancedMesh(new THREE.OctahedronGeometry(1), oreMat, 18);
+    orePile.position.set(0, .58, 0);
+    orePile.castShadow = true; orePile.receiveShadow = true;
+    orePile.frustumCulled = false; orePile.visible = false;
+    orePile.userData.decoration = true;
+    const t = new THREE.Object3D(), col = new THREE.Color(), rand = seeded(b.id || 97);
+    for (let i = 0; i < 18; i++) {
+      const row = Math.floor(i / 6), colIdx = i % 6;
+      const ox = ((colIdx % 3) - 1) * .48 + (rand() - .5) * .2;
+      const oz = (Math.floor(colIdx / 3) * 2 - 1) * .42 + (row - 1) * .2 + (rand() - .5) * .18;
+      const s = .26 + rand() * .18;
+      const h = .36 + .24 * Math.sin(i * 2.1) ** 2 + (row === 1 ? .18 : 0);
+      t.position.set(ox, h * .45, oz);
+      t.rotation.set(rand() * .4, rand() * Math.PI * 2, rand() * .4);
+      t.scale.set(s, h, s * .92);
+      t.updateMatrix(); orePile.setMatrixAt(i, t.matrix);
+      orePile.setColorAt(i, col.setHex([0xffdc77, 0xd89a34, 0xf2be4c][i % 3]));
+    }
+    orePile.instanceMatrix.needsUpdate = true;
+    orePile.instanceColor.needsUpdate = true;
+    g.add(orePile);
+    g.userData.orePile = orePile;
+  }
   const footprint = FOOTPRINTS[b.kind] || FOOTPRINTS.barracks;
   g.add(contactShadow(...footprint));
   const baseRing = ring(b.kind === 'command' ? 4.3 : 3.5, accent, .3); baseRing.userData.decoration = true; g.add(baseRing);
@@ -1450,6 +1498,75 @@ function oreMesh(deposit) {
   return group;
 }
 
+function createDepotConveyor(b, scene) {
+  const dir = b.team === 'enemy' ? -1 : 1;
+  const side = Math.sign(b.x) || 1;
+  const points = [
+    new THREE.Vector3(b.x, APRON_Y + .025, b.z + dir * 1.8),
+    new THREE.Vector3(side * 5.3, APRON_Y + .025, dir * 47.5),
+    new THREE.Vector3(side * 2.2, APRON_Y + .025, dir * 50.0),
+  ];
+  const group = new THREE.Group();
+  const dark = mat(C.dark, 0, 0, .88, .28, 'dark');
+  const steel = mat(0x999b8d, 0, 0, .58, .66, 'steel');
+  const oreMat = mat(0xe5b64a, 0x9a6512, .25, .42, .42, 'ore');
+  const segments = [];
+  let totalLength = 0;
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i], p = points[i + 1];
+    const len = a.distanceTo(p);
+    const angle = Math.atan2(p.x - a.x, p.z - a.z);
+    const cx = (a.x + p.x) / 2, cz = (a.z + p.z) / 2;
+    const channel = new THREE.Mesh(new THREE.BoxGeometry(.72, .035, len), dark);
+    channel.position.set(cx, APRON_Y + .018, cz);
+    channel.rotation.y = angle;
+    channel.receiveShadow = true;
+    group.add(channel);
+    const nx = Math.cos(angle) * .39, nz = -Math.sin(angle) * .39;
+    for (const r of [-1, 1]) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(.08, .065, len), steel);
+      rail.position.set(cx + r * nx, APRON_Y + .035, cz + r * nz);
+      rail.rotation.y = angle;
+      rail.receiveShadow = true;
+      group.add(rail);
+    }
+    const slats = Math.max(1, Math.floor(len / .9));
+    for (let s = 1; s < slats; s++) {
+      const f = s / slats;
+      const slat = new THREE.Mesh(new THREE.BoxGeometry(.68, .055, .1), steel);
+      slat.position.set(THREE.MathUtils.lerp(a.x, p.x, f), APRON_Y + .036, THREE.MathUtils.lerp(a.z, p.z, f));
+      slat.rotation.y = angle;
+      slat.receiveShadow = true;
+      group.add(slat);
+    }
+    segments.push({ a, b: p, start: totalLength, len, angle });
+    totalLength += len;
+  }
+  const lumps = new THREE.InstancedMesh(new THREE.OctahedronGeometry(.16), oreMat, 14);
+  lumps.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  lumps.frustumCulled = false;
+  lumps.count = 0;
+  lumps.receiveShadow = true;
+  group.add(lumps);
+  scene.add(group);
+  return { group, lumps, segments, totalLength, phase: 0, transform: new THREE.Object3D() };
+}
+
+function sampleConveyor(belt, dist, out) {
+  for (const seg of belt.segments) {
+    if (dist <= seg.start + seg.len || seg === belt.segments[belt.segments.length - 1]) {
+      const f = Math.max(0, Math.min(1, (dist - seg.start) / seg.len));
+      out.set(
+        THREE.MathUtils.lerp(seg.a.x, seg.b.x, f),
+        APRON_Y + .08,
+        THREE.MathUtils.lerp(seg.a.z, seg.b.z, f),
+      );
+      return seg.angle;
+    }
+  }
+  return 0;
+}
+
 export class BattlefieldRenderer {
   constructor(container, onSelect = () => {}, onCancelTraining = () => {}, onEjectGarrisoned = () => {}, audio = null) {
     this.container = container; this.onSelect = onSelect; this.view = 'map';
@@ -1473,6 +1590,7 @@ export class BattlefieldRenderer {
     const foliage = addEnvironment(this.scene, compact);
     this.defensePads = new Map();
     this.siteMarkers = new Map();
+    this.depotConveyors = new Map();
     this.entities = new Map(); this.oreFields = new Map(); this.combatEffects = new CombatEffects(this.scene, compact, foliage, sound); this.lastShotId = 0; this.lastTime = 0; this.lastFrame = performance.now(); this.raycaster = new THREE.Raycaster(); this.pointer = new THREE.Vector2();
     this.point = new THREE.Vector3();
     const pointerStarts = new Map();
@@ -1559,6 +1677,7 @@ export class BattlefieldRenderer {
       marker.traverse(object => object.geometry?.dispose());
     }
     this.siteMarkers.clear();
+    for (const id of [...this.depotConveyors.keys()]) this.removeConveyor(id);
   }
   update(snapshot, selectedIds = []) {
     if (!snapshot) return;
@@ -1622,7 +1741,7 @@ export class BattlefieldRenderer {
         }
         const selection = ring(isUnit && ['tank', 'demolition'].includes(item.kind) ? 1.8 : 1.25, 0x9eff40, .95); selection.visible = false; group.add(selection);
         const hp = healthBar(isUnit ? 1.8 : 4.5); hp.position.y = isUnit ? (item.kind === 'tank' ? 2.3 : 2.5) : (item.kind === 'command' ? 6.8 : 5.1); group.add(hp);
-        const profile = !isUnit ? (item.kind === 'emplacement' ? 'emplacement' : 'structure') : VEHICLES.has(item.kind) ? 'vehicle' : 'infantry';
+        const profile = !isUnit ? (item.kind === 'emplacement' || item.kind === 'ore_depot' ? 'emplacement' : 'structure') : VEHICLES.has(item.kind) ? 'vehicle' : 'infantry';
         const list = (Math.random() < .5 ? -1 : 1) * (.07 + Math.random() * .04);
         const damage = new ModelDamage(group.children[0], profile, {
           soot: sooted,
@@ -1661,6 +1780,15 @@ export class BattlefieldRenderer {
       if (item.kind === 'emplacement') {
         entity.group.children[0].rotation.y = item.facing;
         entity.hp.position.y = 3;
+      } else if (item.kind === 'ore_depot') {
+        entity.hp.position.y = 3;
+        entity.storedOre = item.stored_ore || 0;
+        const orePile = entity.group.children[0].userData.orePile;
+        if (orePile) {
+          const fill = Math.max(0, Math.min(1, entity.storedOre / 200));
+          orePile.visible = fill > .005 && item.construction_remaining <= 0;
+          orePile.scale.y = Math.max(.001, fill * 1.45);
+        }
       }
       entity.selectable = isUnit && item.team === 'player' && item.state === 'gather';
       entity.selection.visible = entity.selectable && selected.has(item.id);
@@ -1697,6 +1825,42 @@ export class BattlefieldRenderer {
       if (!restarting && entity.group.visible) this.combatEffects.destroy(entity);
       this.removeEntity(entity);
       this.entities.delete(key);
+    }
+    const activeDepots = new Set();
+    const hasRefinery = {
+      player: snapshot.buildings.some(r => r.team === 'player' && r.kind === 'refinery' && r.hp > 0 && r.construction_remaining <= 0),
+      enemy: snapshot.buildings.some(r => r.team === 'enemy' && r.kind === 'refinery' && r.hp > 0 && r.construction_remaining <= 0),
+    };
+    const reducedMotion = this.combatEffects.reducedMotion.matches;
+    for (const b of snapshot.buildings) {
+      if (b.kind !== 'ore_depot' || b.hp <= 0 || b.construction_remaining > 0) continue;
+      activeDepots.add(b.id);
+      let belt = this.depotConveyors.get(b.id);
+      if (!belt) {
+        belt = createDepotConveyor(b, this.scene);
+        this.depotConveyors.set(b.id, belt);
+      }
+      const ore = b.stored_ore || 0;
+      const capped = b.team === 'player' && snapshot.credits >= 1999.9;
+      const active = hasRefinery[b.team] && ore > .1 && !capped;
+      const ratio = b.hp / b.max_hp;
+      const tier = ratio <= .25 ? .5 : ratio <= .5 ? .75 : 1;
+      if (active && !reducedMotion) belt.phase = (belt.phase + .16 * tier * dt) % 1;
+      const count = ore > .1 ? Math.min(14, Math.max(2, Math.ceil(ore / 200 * 14))) : 0;
+      belt.lumps.count = count;
+      for (let i = 0; i < count; i++) {
+        const u = (i / 14 + belt.phase) % 1;
+        const angle = sampleConveyor(belt, u * belt.totalLength, this.point);
+        belt.transform.position.copy(this.point);
+        belt.transform.rotation.set(0, angle + i * 1.1, 0);
+        belt.transform.scale.set(1, .8, 1.1);
+        belt.transform.updateMatrix();
+        belt.lumps.setMatrixAt(i, belt.transform.matrix);
+      }
+      if (count > 0) belt.lumps.instanceMatrix.needsUpdate = true;
+    }
+    for (const id of [...this.depotConveyors.keys()]) {
+      if (!activeDepots.has(id)) this.removeConveyor(id);
     }
     this.combatEffects.update(dt, this.camera);
     this.audio?.setRumble(1 - Math.exp(-driving / 5));
@@ -1751,6 +1915,16 @@ export class BattlefieldRenderer {
     if (state === 2) this.combatEffects.burn(origin, entity.isUnit ? .65 : 1.2);
     else this.combatEffects.smokePuff(origin, entity.isUnit ? .7 : 1.3);
   }
+  removeConveyor(id) {
+    const belt = this.depotConveyors.get(id);
+    if (!belt) return;
+    this.scene.remove(belt.group);
+    belt.group.traverse(object => {
+      object.geometry?.dispose();
+      if (object.isInstancedMesh) object.dispose();
+    });
+    this.depotConveyors.delete(id);
+  }
   removeEntity(entity) {
     entity.cargo?.dispose();
     this.scene.remove(entity.group);
@@ -1764,6 +1938,7 @@ export class BattlefieldRenderer {
   dispose() {
     this.resizeObserver.disconnect();
     this.combatEffects.dispose();
+    for (const id of [...this.depotConveyors.keys()]) this.removeConveyor(id);
     for (const entity of this.entities.values()) this.removeEntity(entity);
     this.entities.clear();
     this.scene.traverse(object => { object.dispose?.(); object.geometry?.dispose(); });

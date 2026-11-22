@@ -153,6 +153,14 @@ pub(super) enum Strategy {
     Finish,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum StandardOpening {
+    Balanced,
+    DepotBoom,
+    BarracksPressure,
+}
+
 #[cfg_attr(feature = "dev-debug", derive(Serialize))]
 pub(super) struct HardCommander {
     rng: u32,
@@ -160,6 +168,7 @@ pub(super) struct HardCommander {
     plan_until: f32,
     aggression: f32,
     economy: usize,
+    pub(super) opening: StandardOpening,
     // Opening pressure earns a short recovery window before a counterattack.
     rush_recovery_until: f32,
     pub(super) plans: [u32; 6],
@@ -173,12 +182,21 @@ impl HardCommander {
         seed = (seed ^ (seed >> 16)).wrapping_mul(0x85ebca6b);
         seed = (seed ^ (seed >> 13)).wrapping_mul(0xc2b2ae35);
         seed ^= seed >> 16;
+        // Derive the Standard opening separately so Deathmatch commander.rng draws stay identical.
+        let mut open_hash = seed.wrapping_mul(0x27d4_eb2d);
+        open_hash ^= open_hash >> 15;
+        let opening = match open_hash % 3 {
+            0 => StandardOpening::Balanced,
+            1 => StandardOpening::DepotBoom,
+            _ => StandardOpening::BarracksPressure,
+        };
         let mut commander = Self {
             rng: seed,
             strategy: Strategy::Pressure,
             plan_until: 0.0,
             aggression: 0.0,
             economy: 2,
+            opening,
             rush_recovery_until: 0.0,
             plans: [0; 6],
         };
@@ -259,6 +277,373 @@ impl Game {
         let Some(pad) = pad else { return };
         if self.build_emplacement_for(team, pad.slot) && team == Team::Enemy {
             self.ai_status = "PREPARING AN ANTI-TANK POSITION".into();
+        }
+    }
+
+    pub(super) fn ai_site_order(&self, team: Team) -> [BuildingKind; 3] {
+        if self.difficulty != Difficulty::Hard {
+            return BuildingKind::SITE_STRUCTURES;
+        }
+        let enemy_depot = self
+            .buildings
+            .iter()
+            .any(|b| b.team != team && b.hp > 0.0 && b.kind == BuildingKind::OreDepot);
+        if enemy_depot && !self.standing(team, BuildingKind::Barracks) {
+            return [
+                BuildingKind::Barracks,
+                BuildingKind::Refinery,
+                BuildingKind::Factory,
+            ];
+        }
+        let index = if team == Team::Player { 0 } else { 1 };
+        match self.hard_commanders[index].opening {
+            StandardOpening::BarracksPressure => [
+                BuildingKind::Barracks,
+                BuildingKind::Refinery,
+                BuildingKind::Factory,
+            ],
+            StandardOpening::Balanced | StandardOpening::DepotBoom => BuildingKind::SITE_STRUCTURES,
+        }
+    }
+
+    fn own_combat_value(&self, team: Team) -> f32 {
+        let field: f32 = self
+            .units
+            .iter()
+            .filter(|u| u.team == team && u.hp > 0.0 && u.kind != UnitKind::Collector)
+            .map(|u| u.kind.cost())
+            .sum();
+        let queued: f32 = self
+            .production_queue(team, BuildingKind::Barracks)
+            .iter()
+            .chain(self.production_queue(team, BuildingKind::Factory))
+            .filter(|&&kind| kind != UnitKind::Collector)
+            .map(|&kind| kind.cost())
+            .sum();
+        field + queued
+    }
+
+    pub(super) fn hard_emergency_defense(&self, team: Team) -> bool {
+        if !self.alive_building(team, BuildingKind::Barracks)
+            && !self.alive_building(team, BuildingKind::Factory)
+        {
+            return false;
+        }
+        let direction = if team == Team::Enemy { 1.0 } else { -1.0 };
+        let incoming_value: f32 = self
+            .units
+            .iter()
+            .filter(|u| {
+                u.team != team
+                    && u.on_field()
+                    && u.kind != UnitKind::Collector
+                    && u.z * direction < -18.0
+            })
+            .map(|u| u.kind.cost())
+            .sum();
+        if incoming_value <= 0.0 {
+            return false;
+        }
+        let home_combat_value: f32 = self
+            .units
+            .iter()
+            .filter(|u| {
+                u.team == team
+                    && u.hp > 0.0
+                    && u.kind != UnitKind::Collector
+                    && u.z * direction <= 0.0
+            })
+            .map(|u| u.kind.cost())
+            .sum::<f32>()
+            + self
+                .production_queue(team, BuildingKind::Barracks)
+                .iter()
+                .chain(self.production_queue(team, BuildingKind::Factory))
+                .filter(|&&kind| kind != UnitKind::Collector)
+                .map(|&kind| kind.cost())
+                .sum::<f32>();
+        let cc_buffer = if self.alive_building(team, BuildingKind::Command) {
+            90.0
+        } else {
+            0.0
+        };
+        incoming_value > home_combat_value + cc_buffer
+    }
+
+    pub(super) fn hard_construction_reserve(
+        &self,
+        team: Team,
+        _next: Option<BuildingKind>,
+        _credits: f32,
+    ) -> Option<f32> {
+        let index = if team == Team::Player { 0 } else { 1 };
+        let opening = self.hard_commanders[index].opening;
+        let active = self.active_construction(team)?;
+        let direction = if team == Team::Enemy { 1.0 } else { -1.0 };
+        let pad_threatened = self.units.iter().any(|u| {
+            u.team != team
+                && u.on_field()
+                && u.kind != UnitKind::Collector
+                && u.z * direction < -10.0
+        });
+        let opponent = if team == Team::Player {
+            Team::Enemy
+        } else {
+            Team::Player
+        };
+        let enemy_early_barracks = self.alive_building(opponent, BuildingKind::Barracks);
+        #[cfg(any(test, feature = "ai-bench"))]
+        let depot_allowed = self.allow_ai_ore_depots[index];
+        #[cfg(not(any(test, feature = "ai-bench")))]
+        let depot_allowed = true;
+        if depot_allowed
+            && opening == StandardOpening::DepotBoom
+            && active.kind == BuildingKind::Barracks
+            && self.alive_building(team, BuildingKind::Refinery)
+            && !self.standing(team, BuildingKind::OreDepot)
+            && self.has_collector_or_queued(team)
+            && !pad_threatened
+            && !enemy_early_barracks
+        {
+            return Some(0.0);
+        }
+        if opening == StandardOpening::BarracksPressure
+            && active.kind == BuildingKind::Refinery
+            && self.alive_building(team, BuildingKind::Barracks)
+            && !self.standing(team, BuildingKind::Factory)
+            && self.time < 40.0
+            && self.own_combat_value(team) < 180.0
+        {
+            return Some(0.0);
+        }
+        None
+    }
+
+    pub(super) fn should_buy_ore_depot(&self, team: Team) -> bool {
+        self.can_buy_ore_depot(team, false)
+    }
+
+    fn can_buy_ore_depot(&self, team: Team, allow_medium_surplus: bool) -> bool {
+        #[cfg(any(test, feature = "ai-bench"))]
+        {
+            let idx = if team == Team::Player { 0 } else { 1 };
+            if !self.allow_ai_ore_depots[idx] {
+                return false;
+            }
+        }
+        if !self.alive_building(team, BuildingKind::Command)
+            || !self.alive_building(team, BuildingKind::Refinery)
+            || !self.has_collector_or_queued(team)
+        {
+            return false;
+        }
+        let existing = self
+            .buildings
+            .iter()
+            .filter(|b| b.team == team && b.hp > 0.0 && b.kind == BuildingKind::OreDepot)
+            .count();
+        let direction = if team == Team::Enemy { 1.0 } else { -1.0 };
+        let own_half_ore: f32 = self
+            .ore
+            .iter()
+            .filter(|o| o.amount > 0.0 && o.z * direction < -5.0)
+            .map(|o| o.amount)
+            .sum();
+        if own_half_ore <= 1200.0 {
+            return false;
+        }
+        let Some(pad) = self.choose_pad_slot(team, BuildingKind::OreDepot) else {
+            return false;
+        };
+        let flank_half_ore: f32 = self
+            .ore
+            .iter()
+            .filter(|o| {
+                o.amount > 0.0 && o.z * direction < -5.0 && o.x.signum() == pad.x.signum()
+            })
+            .map(|o| o.amount)
+            .sum();
+        if flank_half_ore < 1600.0 {
+            return false;
+        }
+        let pad_unsafe = self.units.iter().any(|u| {
+            u.team != team
+                && u.on_field()
+                && u.kind != UnitKind::Collector
+                && (u.z * direction < -10.0
+                    || distance_sq(pad.x, pad.z, u.x, u.z) < 22.0_f32.powi(2))
+        });
+        if pad_unsafe {
+            return false;
+        }
+        let collectors = self
+            .units
+            .iter()
+            .filter(|u| u.team == team && u.kind == UnitKind::Collector && u.hp > 0.0)
+            .count()
+            + self
+                .production_queue(team, BuildingKind::Factory)
+                .iter()
+                .filter(|&&k| k == UnitKind::Collector)
+                .count();
+        match self.difficulty {
+            Difficulty::Easy => false,
+            Difficulty::Medium => {
+                if existing > 0 || self.team_mode(team) == Mode::Retreat {
+                    return false;
+                }
+                let opponent = if team == Team::Player {
+                    Team::Enemy
+                } else {
+                    Team::Player
+                };
+                let enemy_early_barracks = self.alive_building(opponent, BuildingKind::Barracks);
+                if self.game_mode == GameMode::Standard
+                    && !self.alive_building(team, BuildingKind::Barracks)
+                    && !enemy_early_barracks
+                {
+                    return true;
+                }
+                if collectors < 2 || !self.alive_building(team, BuildingKind::Factory) {
+                    return false;
+                }
+                let mut own_combat_cost = 0.0_f32;
+                let mut enemy_combat_cost = 0.0_f32;
+                for u in self
+                    .units
+                    .iter()
+                    .filter(|u| u.hp > 0.0 && u.kind != UnitKind::Collector)
+                {
+                    if u.team == team {
+                        own_combat_cost += u.kind.cost();
+                    } else if u.on_field() {
+                        enemy_combat_cost += u.kind.cost();
+                    }
+                }
+                let lead_needed = if self.game_mode == GameMode::Standard {
+                    160.0
+                } else {
+                    240.0
+                };
+                let late_stalemate = self.game_mode == GameMode::Standard
+                    && self.time >= 120.0
+                    && own_combat_cost >= 500.0
+                    && own_combat_cost + 60.0 >= enemy_combat_cost;
+                if own_combat_cost >= enemy_combat_cost + lead_needed || late_stalemate {
+                    return true;
+                }
+                if allow_medium_surplus {
+                    let credits = if team == Team::Player {
+                        self.credits
+                    } else {
+                        self.ai_credits
+                    };
+                    return credits >= ORE_DEPOT_COST + 150.0;
+                }
+                false
+            }
+            Difficulty::Hard => {
+                let opponent = if team == Team::Player {
+                    Team::Enemy
+                } else {
+                    Team::Player
+                };
+                let enemy_early_barracks = self.alive_building(opponent, BuildingKind::Barracks);
+                let index = if team == Team::Player { 0 } else { 1 };
+                let commander = &self.hard_commanders[index];
+                let boom_window = self.game_mode == GameMode::Standard
+                    && commander.opening == StandardOpening::DepotBoom
+                    && existing == 0
+                    && !enemy_early_barracks
+                    && !self.alive_building(team, BuildingKind::Barracks);
+                if boom_window {
+                    return true;
+                }
+                if matches!(commander.strategy, Strategy::Finish | Strategy::Defend)
+                    || !self.alive_building(team, BuildingKind::Factory)
+                    || collectors < 2
+                {
+                    return false;
+                }
+                let mut own = Force::default();
+                let mut opposing = Force::default();
+                let mut attackers = 0usize;
+                for u in self.units.iter().filter(|u| u.hp > 0.0) {
+                    if u.team == team {
+                        own.add(u.kind, u.hp);
+                        if !matches!(u.kind, UnitKind::Collector | UnitKind::Demolition)
+                            && u.state == UnitState::Attack
+                        {
+                            attackers += 1;
+                        }
+                    } else if u.on_field() {
+                        opposing.add(u.kind, u.hp);
+                    }
+                }
+                for &kind in self
+                    .production_queue(team, BuildingKind::Barracks)
+                    .iter()
+                    .chain(self.production_queue(team, BuildingKind::Factory))
+                {
+                    own.add(kind, kind.health());
+                }
+                let advantage =
+                    own.power_against(&opposing) / opposing.power_against(&own).max(1.0);
+                let own_rifles_safe = opposing.count[0] <= own.count[2] * 3.0 + 5.0;
+                let credits = if team == Team::Player {
+                    self.credits
+                } else {
+                    self.ai_credits
+                };
+                if self.game_mode == GameMode::Standard {
+                    if existing == 0 {
+                        own.health >= 550.0
+                            && own_rifles_safe
+                            && ((credits >= 90.0 && advantage >= 0.90)
+                                || advantage >= 1.05
+                                || (advantage >= 0.98
+                                    && (commander.strategy == Strategy::Economy || attackers == 0)))
+                    } else if existing == 1 && own_half_ore > 2800.0 {
+                        own.health >= 700.0
+                            && own_rifles_safe
+                            && ((credits >= 100.0 && advantage >= 0.98) || advantage >= 1.12)
+                    } else {
+                        false
+                    }
+                } else {
+                    existing == 0
+                        && own.health >= 800.0
+                        && advantage >= 1.15
+                        && !self.production_queue(team, BuildingKind::Factory).is_empty()
+                        && !self.production_queue(team, BuildingKind::Barracks).is_empty()
+                        && credits >= ORE_DEPOT_COST + 60.0
+                        && own_rifles_safe
+                }
+            }
+        }
+    }
+
+    pub(super) fn prepare_ore_depot(&mut self, team: Team) {
+        self.prepare_ore_depot_with_surplus(team, false);
+    }
+
+    pub(super) fn prepare_ore_depot_with_surplus(&mut self, team: Team, allow_medium_surplus: bool) {
+        if !self.can_buy_ore_depot(team, allow_medium_surplus) {
+            return;
+        }
+        let credits = if team == Team::Player {
+            self.credits
+        } else {
+            self.ai_credits
+        };
+        if credits < ORE_DEPOT_COST {
+            return;
+        }
+        let Some(pad) = self.choose_pad_slot(team, BuildingKind::OreDepot) else {
+            return;
+        };
+        if self.build_pad_for(team, BuildingKind::OreDepot, Some(pad.slot)) && team == Team::Enemy {
+            self.ai_status = "BUILDING A FORWARD ORE DEPOT".into();
         }
     }
 
@@ -609,7 +994,7 @@ impl Game {
         } else {
             self.demo_wave_timer
         };
-        let group_size = match strategy {
+        let group_size: usize = match strategy {
             Strategy::Pressure => {
                 if aggression > 0.5 {
                     5
@@ -642,18 +1027,39 @@ impl Game {
         } else {
             mobile_reserves
         };
+        let enemy_depots = self
+            .buildings
+            .iter()
+            .filter(|b| b.team != team && b.hp > 0.0 && b.kind == BuildingKind::OreDepot)
+            .count() as f32;
+        let enemy_depot_ore: f32 = self
+            .buildings
+            .iter()
+            .filter(|b| b.team != team && b.hp > 0.0 && b.kind == BuildingKind::OreDepot)
+            .map(|b| b.stored_ore)
+            .sum();
+        let tech_holding = self.game_mode == GameMode::Standard
+            && !self.alive_building(team, BuildingKind::Factory)
+            && self.alive_building(team, BuildingKind::Command)
+            && !(self.hard_commanders[index].opening == StandardOpening::BarracksPressure
+                && self.time < 50.0);
         let launch = !retreat
             && (!recovering_rush || !can_rebuild)
             && offensive_reserves > 0
-            && ((threatened && advantage > 1.25 + aggression * 0.2)
+            && ((!tech_holding && threatened && advantage > 1.25 + aggression * 0.2)
                 || (threatened && defending_contact)
                 || !can_rebuild
-                || (wave <= 0.0
+                || (!tech_holding
+                    && wave <= 0.0
                     && ((offensive_reserves >= group_size
                         && advantage > 1.25 + aggression * 0.2)
                         || (attackers >= 3 && offensive_reserves >= 1 && advantage > 1.2)
                         || (advantage > 1.6 && offensive_reserves >= 3)
                         || (wave < -24.0 && advantage > 1.15)
+                        || (!threatened
+                            && enemy_depot_ore >= 80.0
+                            && offensive_reserves >= group_size.saturating_sub(1).max(4)
+                            && advantage >= 1.0)
                         // Equal armies must eventually contest the map. Vary the
                         // deadline, but never use it to charge an overwhelming
                         // force or abandon a base that is already under attack.
@@ -800,12 +1206,29 @@ impl Game {
             && (collectors == 0
                 || (attackers == 0 && advantage > 0.95)
                 || (self.time > 40.0 && advantage > 1.2 && own.health > 900.0));
+        if self.game_mode == GameMode::Standard
+            && collectors >= 2
+            && !threatened
+            && !recovering_rush
+            && !retreat
+        {
+            self.prepare_ore_depot(team);
+            if self.should_buy_ore_depot(team) {
+                return;
+            }
+        }
         if expand {
             self.queue_unit(team, UnitKind::Collector);
             if self
                 .production_queue(team, BuildingKind::Factory)
                 .is_empty()
             {
+                return;
+            }
+        }
+        if self.game_mode == GameMode::Standard && !threatened && !recovering_rush && !retreat {
+            self.prepare_ore_depot(team);
+            if self.should_buy_ore_depot(team) {
                 return;
             }
         }
@@ -830,6 +1253,7 @@ impl Game {
                         1.0 + opposing.count[1] * 1.4
                             + opposing.count[0] * 0.25
                             + enemy_emplacements * 4.0
+                            + enemy_depots * 2.0
                     }
                     UnitKind::Rocket => 1.0 + opposing.count[2] * 1.8 + trucks as f32 * 3.0,
                     _ => 1.0 + opposing.count[0] * 0.65,
@@ -863,6 +1287,9 @@ impl Game {
             }
             self.queue_unit(team, kind);
             own.add(kind, kind.health());
+        }
+        if !threatened && !recovering_rush && !retreat {
+            self.prepare_ore_depot(team);
         }
     }
 }

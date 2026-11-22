@@ -468,7 +468,32 @@ export class CombatEffects {
     if (entity.kind !== 'demolition') {
       this.burst(position, scale, heavy);
       this.sound(!entity.isUnit ? 'collapse' : vehicle ? 'wreck' : 'fall', position.x, position.z,
-        { size: entity.kind === 'emplacement' ? .6 : 1 });
+        { size: entity.kind === 'emplacement' || entity.kind === 'ore_depot' ? .6 : 1 });
+      if (entity.kind === 'ore_depot' && entity.storedOre > 1) {
+        const chunks = Math.min(18, Math.max(6, Math.ceil(entity.storedOre / 14)));
+        for (let i = 0; i < chunks; i++) {
+          this.emit('spark', { x: position.x + random(-.6, .6), y: 1.4, z: position.z + random(-.6, .6) }, {
+            size: random(.2, .36),
+            life: random(.55, 1.0),
+            vx: random(-4.5, 4.5),
+            vy: random(3.5, 7.2),
+            vz: random(-4.5, 4.5),
+            gravity: 15,
+            bounces: 2,
+            color: i % 2 === 0 ? 0xffdc77 : 0xe5b64a,
+          });
+        }
+        for (let i = 0; i < 2; i++) {
+          this.emit('dust', { x: position.x + random(-.4, .4), y: .6, z: position.z + random(-.4, .4) }, {
+            size: 1.3,
+            life: .7,
+            vx: random(-1.2, 1.2),
+            vy: .6,
+            vz: random(-1.2, 1.2),
+            color: 0xd8a840,
+          });
+        }
+      }
     }
     // Keep the actual silhouette as a scorched wreck. The model is detached
     // before its selection and health UI are disposed by the renderer.
@@ -477,7 +502,9 @@ export class CombatEffects {
     const wreck = new THREE.Group(); wreck.position.copy(entity.group.position); wreck.add(model);
     for (const child of [...model.children]) {
       if (child.userData.decoration) {
-        model.remove(child); child.geometry.dispose(); child.material.dispose();
+        model.remove(child);
+        if (child.isInstancedMesh) child.dispose();
+        child.geometry.dispose(); child.material.dispose();
       }
     }
     const material = new THREE.MeshStandardMaterial({ color: heavy ? 0x33332c : 0x55543d,

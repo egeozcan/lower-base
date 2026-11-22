@@ -78,6 +78,8 @@ pub struct MatchResult {
     pub hard_truck_net: f32,
     /// Anti-tank guns Hard placed on its pads during the match.
     pub hard_emplacements_built: usize,
+    /// Forward ore depots Hard placed on its pads during the match.
+    pub hard_ore_depots_built: usize,
 }
 
 #[derive(serde::Deserialize)]
@@ -412,6 +414,7 @@ pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) ->
     let mut trucks = std::collections::HashSet::new();
     let mut explosions = std::collections::HashSet::new();
     let mut emplacements = std::collections::HashSet::new();
+    let mut ore_depots = std::collections::HashSet::new();
     let mut hard_truck_net = 0.0;
     let dt = if scripted { 0.05 } else { 0.25 };
     let trace = std::env::var_os("AI_BENCH_TRACE").is_some();
@@ -536,6 +539,13 @@ pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) ->
         {
             emplacements.insert(b.id);
         }
+        for b in game
+            .buildings
+            .iter()
+            .filter(|b| b.team == hard_team && b.kind == BuildingKind::OreDepot)
+        {
+            ore_depots.insert(b.id);
+        }
         if game.outcome != Outcome::Playing {
             break;
         }
@@ -557,6 +567,7 @@ pub fn play(seed: u32, hard_team: Team, scenario: Scenario, max_seconds: f32) ->
         explosions: explosions.len(),
         hard_truck_net,
         hard_emplacements_built: emplacements.len(),
+        hard_ore_depots_built: ore_depots.len(),
     }
 }
 

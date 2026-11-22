@@ -156,6 +156,14 @@ test('vehicles and emplacements loosen and detach exterior parts as health drops
   gunDamage.update(.2, { x: 0, z: -8 });
   assert.ok(gunDamage.takeDetached().length >= 2, 'critical anti-tank gun should shed parts');
   assert.ok(gunDamage.scars.length >= 2);
+
+  const depot = buildingMesh({ kind: 'ore_depot', team: 'player' });
+  assert.ok(depot.userData.orePile, 'ore depot should attach an instanced ore pile');
+  assert.equal(depot.userData.orePile.userData.decoration, true, 'ore pile should be marked as decoration');
+  const depotDamage = new ModelDamage(depot, 'emplacement', materials, { kind: 'ore_depot' });
+  depotDamage.update(.2, { x: 0, z: -8 });
+  assert.ok(depotDamage.takeDetached().length >= 2, 'critical ore depot should shed parts');
+  assert.ok(depotDamage.scars.length >= 2);
 });
 
 test('CombatEffects simulates typed bouncing fallen parts, bouncing electric sparks, and ribbon arcs', () => {
@@ -292,7 +300,7 @@ test('wounded infantry gain progressive bandages, splints, crutches, and shed ge
 });
 
 test('building and unit meshes carry valid UVs and textured materials while preserving faction colors', () => {
-  const structures = ['command', 'refinery', 'factory', 'barracks', 'emplacement'];
+  const structures = ['command', 'refinery', 'factory', 'barracks', 'emplacement', 'ore_depot'];
   for (const kind of structures) {
     const model = buildingMesh({ kind, team: 'player' });
     let meshCount = 0;

@@ -45,12 +45,14 @@ export class CollectorCargo {
     const progress = clamp(item.unload_progress || 0);
     if (!progress || !this.group.visible) this.delivery = null;
     if (progress > 0 && !this.delivery && this.group.visible) {
-      const refinery = buildings.filter(b => b.kind === 'refinery' && b.team === item.team && b.hp > 0)
+      const drop = buildings.filter(b => (b.kind === 'refinery' || b.kind === 'ore_depot') && b.team === item.team && b.hp > 0 && (b.construction_remaining || 0) <= 0)
         .sort((a, b) => Math.hypot(a.x - item.x, a.z - item.z) - Math.hypot(b.x - item.x, b.z - item.z))[0];
-      if (refinery) {
-        const side = refinery.team === 'enemy' ? -1 : 1;
+      if (drop) {
+        const side = drop.team === 'enemy' ? -1 : 1;
         this.delivery = { fill: amount,
-          target: new THREE.Vector3(refinery.x - .7 * side, 3.5, refinery.z - .7 * side),
+          target: drop.kind === 'ore_depot'
+            ? new THREE.Vector3(drop.x, 1.9, drop.z)
+            : new THREE.Vector3(drop.x - .7 * side, 3.5, drop.z - .7 * side),
           grains: Array.from({length: Math.max(8, Math.ceil(amount * 32))}, () => ({})) };
       }
     }

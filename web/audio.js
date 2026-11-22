@@ -197,6 +197,12 @@ const SOUNDS = {
   credit: { ui: true, level: .09, wet: .1, gap: .1, length: .15, make(audio, out, t) {
     audio.metal(out, t, { gain: 1, duration: .13, base: 2100 });
   } },
+  // An ore load dumped into a forward depot hopper.
+  hopper: { ui: true, level: .14, wet: .15, gap: .15, length: .22, make(audio, out, t) {
+    audio.metal(out, t, { gain: .9, duration: .14, base: vary(780, .06) });
+    audio.noise(out, t + .01, { gain: .55, duration: .12, attack: .004, type: 'bandpass', from: 1100, q: 1.4 });
+    audio.noise(out, t, { gain: .4, duration: .07, attack: .002, from: 280, brown: true });
+  } },
   // Base under attack: an air-raid siren winding up and down.
   alert: { ui: true, level: .08, wet: .4, gap: 3, hold: 0, length: 2.4, make(audio, out, t) { audio.siren(out, t, 2.3); } },
   pause: { ui: true, level: 1.2, gap: .05, length: .08, make(audio, out, t) { toggle(audio, out, t, 2000, 700); } },

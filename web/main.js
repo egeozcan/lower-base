@@ -42,7 +42,7 @@ const difficultyDescriptions = {
   hard: 'Adapts its strategy, builds counters, and varies its attacks each match.',
 };
 const modeDescriptions = {
-  deathmatch: 'Full bases from the start and a large income. Build armies and guns.',
+  deathmatch: 'Full bases from the start and a large income. Build armies, guns, and depots.',
   standard: 'Start with a command center and little income. Construct your refinery, barracks and factory.',
 };
 for (const input of document.querySelectorAll('input[name="game-mode"]')) {
@@ -56,6 +56,11 @@ const structures = [
   { kind: 'refinery', key: 'g', cost: 600 },
   { kind: 'barracks', key: 'b', cost: 400 },
   { kind: 'factory', key: 'f', cost: 800 },
+];
+const isPadKind = kind => kind === 'emplacement' || kind === 'ore_depot';
+const padSpecs = [
+  { kind: 'emplacement', id: 'pad-emplacement', key: '8', cost: 200 },
+  { kind: 'ore_depot', id: 'pad-ore-depot', key: '9', cost: 220 },
 ];
 for (const input of document.querySelectorAll('input[name="difficulty"]')) {
   input.addEventListener('change', () => {
@@ -75,11 +80,11 @@ function train(kind) {
   refresh();
   audio.play(queued() > before ? 'queue' : 'denied');
 }
-function buildEmplacement(slot) {
+function buildPad(kind) {
   if (!canCommand()) return;
   const before = structureCount();
-  debugRecorder?.command('build_emplacement', { slot }, snapshot.time);
-  game.build_emplacement(slot);
+  debugRecorder?.command('build_pad', { kind }, snapshot.time);
+  game.build_pad(kind);
   refresh();
   audio.play(structureCount() > before ? 'build' : 'denied');
 }
@@ -186,7 +191,7 @@ function setMuted(value) {
   audio.play('click');
 }
 
-// Sidebar cameos follow the hotkey order; the anti-tank pads are static markup.
+// Sidebar cameos follow the hotkey order; the front-pad buttons are static markup.
 const cameoOrder = ['soldier', 'rocket', 'tank', 'collector', 'demolition'];
 function createProduction() {
   const notes = {
@@ -256,7 +261,7 @@ function onSelect(id, additive, touch) {
 function setText(element, text) { if (element.textContent !== text) element.textContent = text; }
 
 // EVA-style status line: derived from snapshots only, it never affects the match.
-const onlineGuns = new Set(), onlineStructures = new Set();
+const onlinePads = new Set(), onlineStructures = new Set();
 let lastUnitCount = null, statusTimer = 0;
 function announce(message, sound) {
   const status = $('hud-status');
@@ -269,7 +274,7 @@ function announce(message, sound) {
 // Raise the alarm when one of our buildings is hit or lost, then stay quiet
 // for a while: a base under siege is hit many times a second.
 const ALARM_INTERVAL = 15000;
-const buildingHealth = new Map(), unloading = new Set();
+const buildingHealth = new Map(), unloading = new Map();
 let lastAlarm = -Infinity;
 function watchBase() {
   const buildings = snapshot.buildings.filter(b => b.team === 'player');
@@ -281,15 +286,22 @@ function watchBase() {
     lastAlarm = performance.now();
     announce('BASE UNDER ATTACK', 'alert');
   }
-  // A collector that has finished unloading has just been paid.
+  // A collector that has finished unloading chimes credit (refinery) or hopper (depot).
+  const depots = buildings.filter(b => b.kind === 'ore_depot' && finished(b));
   for (const unit of snapshot.units) {
     if (unit.team !== 'player' || unit.kind !== 'collector') continue;
-    if (unit.unload_progress > 0) unloading.add(unit.id);
-    else if (unloading.delete(unit.id)) audio.play('credit');
+    if (unit.unload_progress > 0) {
+      const nearDepot = depots.some(d => Math.hypot(d.x - unit.x, d.z - unit.z) < 6.0);
+      unloading.set(unit.id, nearDepot ? 'hopper' : 'credit');
+    } else {
+      const sound = unloading.get(unit.id);
+      unloading.delete(unit.id);
+      if (sound && unit.cargo < 1) audio.play(sound);
+    }
   }
 }
 function resetHud() {
-  onlineGuns.clear();
+  onlinePads.clear();
   onlineStructures.clear();
   buildingHealth.clear();
   unloading.clear();
@@ -329,7 +341,7 @@ function drawRadar() {
   const colors = { player: '#4a8be6', enemy: '#d4342a' };
   for (const building of snapshot.buildings) {
     if (building.hp <= 0) continue;
-    const size = building.kind === 'emplacement' ? 1.8 : 4.2;
+    const size = isPadKind(building.kind) ? 1.8 : 4.2;
     const w = Math.max(3 * ratio, size * sx), h = Math.max(3 * ratio, size * sz);
     ctx.fillStyle = colors[building.team];
     ctx.fillRect(px(building.x) - w / 2, pz(building.z) - h / 2, w, h);
@@ -377,7 +389,8 @@ function refresh() {
   const refineryBuilding = snapshot.buildings.some(b => b.team === 'player' && b.kind === 'refinery' && !finished(b));
   const collectors = snapshot.units.filter(u => u.team === 'player' && u.kind === 'collector').length;
   const sheltered = snapshot.units.filter(u => u.team === 'player' && u.state === 'garrison').length;
-  $('economy-status').textContent = `${collectors} COLLECTOR${collectors === 1 ? '' : 'S'} · REFINERY ${refinery ? 'ONLINE' : refineryBuilding ? 'BUILDING' : snapshot.game_mode === 'standard' ? 'NONE' : 'LOST'}${sheltered ? ` · ${sheltered} INSIDE` : ''}`;
+  const depotOre = Math.round(snapshot.buildings.filter(b => b.team === 'player' && b.kind === 'ore_depot' && finished(b)).reduce((sum, b) => sum + (b.stored_ore || 0), 0));
+  $('economy-status').textContent = `${collectors} COLLECTOR${collectors === 1 ? '' : 'S'} · REFINERY ${refinery ? 'ONLINE' : refineryBuilding ? 'BUILDING' : snapshot.game_mode === 'standard' ? 'NONE' : 'LOST'}${depotOre > 0 ? ` · ${depotOre} IN DEPOT` : ''}${sheltered ? ` · ${sheltered} INSIDE` : ''}`;
   const demolitionQueued = snapshot.factory_queue.includes('demolition');
   const demolitionAlive = snapshot.units.some(u => u.team === 'player' && u.kind === 'demolition');
   setText($('demolition-status'), demolitionAlive ? 'ACTIVE' : demolitionQueued ? 'QUEUED' : '1×');
@@ -402,11 +415,11 @@ function refresh() {
     const buildings = snapshot.buildings.filter(b => b.team === team);
     $(`${prefix}-units`).textContent = units.length;
     $(`${prefix}-buildings`).textContent = buildings.length;
-    $(`${prefix}-bar`).style.width = `${Math.max(0, Math.min(100, buildings.filter(b => b.kind !== 'emplacement').reduce((a,b) => a + b.hp / b.max_hp, 0) / 4 * 100))}%`;
+    $(`${prefix}-bar`).style.width = `${Math.max(0, Math.min(100, buildings.filter(b => !isPadKind(b.kind)).reduce((a,b) => a + b.hp / b.max_hp, 0) / 4 * 100))}%`;
   }
   const command = snapshot.buildings.some(b => b.team === 'player' && b.kind === 'command');
-  // The command center builds one site structure at a time; guns build on their own pads.
-  const constructing = snapshot.buildings.find(b => b.team === 'player' && b.kind !== 'emplacement' && b.hp > 0 && b.construction_remaining > 0);
+  // The command center builds one site structure at a time; pad structures build on their own pads.
+  const constructing = snapshot.buildings.find(b => b.team === 'player' && !isPadKind(b.kind) && b.hp > 0 && b.construction_remaining > 0);
   for (const { kind, cost } of structures) {
     const structure = snapshot.buildings.find(b => b.team === 'player' && b.kind === kind && b.hp > 0);
     const button = $(`construct-${kind}`);
@@ -422,19 +435,32 @@ function refresh() {
       if (online) onlineStructures.add(kind); else onlineStructures.delete(kind);
     }
   }
-  for (const slot of [0, 1]) {
-    const gun = snapshot.buildings.find(b => b.team === 'player' && b.defense_slot === slot);
-    const button = $(`defense-${slot}`);
-    const online = !!gun && gun.construction_remaining <= 0;
-    const building = !!gun && gun.construction_remaining > 0;
-    button.disabled = !canCommand() || !!gun || !command || snapshot.credits < 200;
-    button.classList.toggle('online', online);
-    button.classList.toggle('is-building', building);
-    if (building) button.style.setProperty('--progress', Math.max(0, Math.min(1, 1 - gun.construction_remaining / gun.construction_time)));
-    setText(button.querySelector('.cameo-cost'), online ? 'ONLINE' : building ? `${Math.ceil(gun.construction_remaining)}s` : command ? '200' : 'LOST');
-    if (online && !onlineGuns.has(slot) && !demo) announce('CONSTRUCTION COMPLETE', 'complete');
-    if (online) onlineGuns.add(slot); else onlineGuns.delete(slot);
+  const occupiedPads = snapshot.buildings.filter(b => b.team === 'player' && b.hp > 0 && b.defense_slot != null).length;
+  const freePad = occupiedPads < 2;
+  const hasCollector = collectors > 0 || snapshot.factory_queue.includes('collector');
+  for (const { kind, id, cost } of padSpecs) {
+    const owned = snapshot.buildings.filter(b => b.team === 'player' && b.hp > 0 && b.kind === kind);
+    const building = owned
+      .filter(b => b.construction_remaining > 0)
+      .sort((a, b) => a.construction_remaining - b.construction_remaining)[0];
+    const onlineCount = owned.filter(b => b.construction_remaining <= 0).length;
+    const prereq = kind === 'emplacement' ? command : (command && refinery && hasCollector);
+    const button = $(id);
+    button.disabled = !canCommand() || !freePad || !prereq || snapshot.credits < cost;
+    button.classList.toggle('online', !freePad && onlineCount === 2);
+    button.classList.toggle('is-building', !!building);
+    if (building) button.style.setProperty('--progress', Math.max(0, Math.min(1, 1 - building.construction_remaining / building.construction_time)));
+    setText(button.querySelector('.cameo-cost'), building ? `${Math.ceil(building.construction_remaining)}s` : !command ? 'LOST' : !freePad ? (onlineCount === 2 ? 'ONLINE' : 'FULL') : String(cost));
+    const badge = button.querySelector('.cameo-badge');
+    badge.hidden = owned.length === 0;
+    setText(badge, String(owned.length));
   }
+  const aliveOnlinePads = new Set(snapshot.buildings.filter(b => b.team === 'player' && b.defense_slot != null && finished(b)).map(b => b.id));
+  for (const id of aliveOnlinePads) {
+    if (!onlinePads.has(id) && !demo && snapshot.time > 0) announce('CONSTRUCTION COMPLETE', 'complete');
+  }
+  onlinePads.clear();
+  for (const id of aliveOnlinePads) onlinePads.add(id);
   const playerUnits = snapshot.units.filter(u => u.team === 'player').length;
   if (lastUnitCount !== null && playerUnits > lastUnitCount && !demo) announce('UNIT READY', 'ready');
   lastUnitCount = playerUnits;
@@ -598,7 +624,7 @@ $('gather').addEventListener('click', () => setMode('gather'));
 $('attack').addEventListener('click', () => setMode('attack'));
 $('retreat').addEventListener('click', () => setMode('retreat'));
 $('send-selected').addEventListener('click', sendSelected);
-for (const slot of [0, 1]) $(`defense-${slot}`).addEventListener('click', () => buildEmplacement(slot));
+for (const { kind, id } of padSpecs) $(id).addEventListener('click', () => buildPad(kind));
 for (const { kind } of structures) $(`construct-${kind}`).addEventListener('click', () => construct(kind));
 function setView(view) {
   if (!renderer || !game || paused) return;
@@ -648,8 +674,8 @@ window.addEventListener('keydown', event => {
   if (event.key.toLowerCase() === 'r') setMode('retreat');
   const spec = specs.find(s => s.key === event.key);
   if (spec) train(spec.kind);
-  if (event.key === '8') buildEmplacement(0);
-  if (event.key === '9') buildEmplacement(1);
+  const pad = padSpecs.find(p => p.key === event.key);
+  if (pad) buildPad(pad.kind);
   const structure = structures.find(s => s.key === event.key.toLowerCase());
   if (structure) construct(structure.kind);
   if (event.key === 'Enter' && !(event.target instanceof HTMLButtonElement)) sendSelected();

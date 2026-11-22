@@ -63,6 +63,7 @@ fn value(game: &Game, team: Team) -> f32 {
             .filter(|b| b.team == team && b.hp > 0.0)
             .map(|b| match b.kind {
                 BuildingKind::Emplacement => EMPLACEMENT_COST * b.hp / b.max_hp,
+                BuildingKind::OreDepot => ORE_DEPOT_COST * b.hp / b.max_hp + b.stored_ore,
                 _ => 0.25 * b.hp + 0.5 * b.max_hp,
             })
             .sum::<f32>()

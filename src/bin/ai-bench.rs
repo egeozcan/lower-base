@@ -69,6 +69,50 @@ fn main() {
         println!("{}", serde_json::to_string_pretty(&runs).unwrap());
         return;
     }
+    if args.first().is_some_and(|arg| arg == "--depot") {
+        let number = |i: usize, default: u32| -> u32 {
+            args.get(i)
+                .map(|s| s.parse().expect("expected an unsigned integer"))
+                .unwrap_or(default)
+        };
+        let count = number(1, 16);
+        let first = number(2, 0);
+        let seconds = number(3, 360) as f32;
+        let report = lower_base::simulation::depot_benchmark::run(count, first, seconds);
+        eprintln!("=== Mining ROI (gross / net vs 0 depots) ===");
+        for r in &report.roi {
+            let be = r
+                .break_even_seconds
+                .map_or("never".into(), |s| format!("{s:.0}s"));
+            let cols: Vec<_> = r
+                .horizons
+                .iter()
+                .map(|h| format!("{}s:{:.0} ({:+.0})", h.seconds, h.gross_mined, h.net_profit))
+                .collect();
+            eprintln!(
+                "  {}c {}d (break-even {:>5}): {}",
+                r.collectors,
+                r.depots,
+                be,
+                cols.join("  ")
+            );
+        }
+        eprintln!("=== A/B Duels (Depots ON vs Depots OFF, {count} seeds x 2 sides) ===");
+        for d in &report.duels {
+            eprintln!(
+                "  {:18}: {}/{} ({:.1}%), draws={}, avg_depots={:.2}, avg_s={:.1}s",
+                d.bucket,
+                d.depot_wins,
+                d.games,
+                d.win_rate * 100.0,
+                d.draws,
+                d.avg_depots_built,
+                d.avg_seconds
+            );
+        }
+        println!("{}", serde_json::to_string_pretty(&report).unwrap());
+        return;
+    }
     if args.first().is_some_and(|arg| arg == "--trucks") {
         let runs = lower_base::simulation::truck_benchmark::runs();
         for r in &runs {

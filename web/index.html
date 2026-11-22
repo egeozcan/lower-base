@@ -38,7 +38,7 @@
           <label><input type="radio" name="game-mode" value="deathmatch" checked><span>DEATHMATCH</span></label>
           <label><input type="radio" name="game-mode" value="standard"><span>STANDARD</span></label>
         </div>
-        <p id="mode-description" aria-live="polite">Full bases from the start and a large income. Build armies and guns.</p>
+        <p id="mode-description" aria-live="polite">Full bases from the start and a large income. Build armies, guns, and depots.</p>
       </fieldset>
       <fieldset class="difficulty-picker" aria-describedby="difficulty-description difficulty-fairness">
         <legend>ENEMY</legend>
@@ -134,15 +134,15 @@
         <span class="cameo-progress" aria-hidden="true"></span>
         <span class="cameo-key" aria-hidden="true">F</span><span class="cameo-name">FACTORY</span><small class="cameo-cost">800</small>
       </button>
-      <button id="defense-0" class="cameo" type="button" title="Build left anti-tank gun (8): 200 credits, 8 seconds. Strong against tanks; vulnerable to rifles.">
+      <button id="pad-emplacement" class="cameo" type="button" title="Build anti-tank gun on an open pad (8): 200 credits, 8 seconds. Prefers threatened flank. Strong against tanks; vulnerable to rifles.">
         <span class="cameo-icon cameo-art-emplacement" aria-hidden="true"></span>
         <span class="cameo-progress" aria-hidden="true"></span>
-        <span class="cameo-key" aria-hidden="true">8</span><span class="cameo-name">AT GUN · L</span><small class="cameo-cost">200</small>
+        <span class="cameo-key" aria-hidden="true">8</span><span class="cameo-name">AT GUN</span><small class="cameo-cost">200</small><span class="cameo-badge" hidden></span>
       </button>
-      <button id="defense-1" class="cameo" type="button" title="Build right anti-tank gun (9): 200 credits, 8 seconds. Strong against tanks; vulnerable to rifles.">
-        <span class="cameo-icon cameo-art-emplacement" aria-hidden="true"></span>
+      <button id="pad-ore-depot" class="cameo" type="button" title="Build forward ore depot on an open pad (9): 220 credits, 10 seconds. Requires refinery and a collector. Rapid 1.5s dump on outer flank; conveys buffered ore (up to 200) to credits at 12.5/s while refinery stands. Slows under damage; vulnerable to rifles.">
+        <span class="cameo-icon cameo-art-structure cameo-art-ore-depot" aria-hidden="true"></span>
         <span class="cameo-progress" aria-hidden="true"></span>
-        <span class="cameo-key" aria-hidden="true">9</span><span class="cameo-name">AT GUN · R</span><small class="cameo-cost">200</small>
+        <span class="cameo-key" aria-hidden="true">9</span><span class="cameo-name">ORE DEPOT</span><small class="cameo-cost">220</small><span class="cameo-badge" hidden></span>
       </button>
     </div>
 

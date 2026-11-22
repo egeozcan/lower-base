@@ -11,11 +11,17 @@ pub mod balance_benchmark;
 #[cfg(any(test, feature = "ai-bench"))]
 #[path = "defense_benchmark.rs"]
 pub mod defense_benchmark;
+#[cfg(any(test, feature = "ai-bench"))]
+#[path = "depot_benchmark.rs"]
+pub mod depot_benchmark;
 #[path = "demolition.rs"]
 mod demolition;
 #[cfg(test)]
 #[path = "emplacement_tests.rs"]
 mod emplacement_tests;
+#[cfg(test)]
+#[path = "ore_depot_tests.rs"]
+mod ore_depot_tests;
 #[path = "navigation.rs"]
 mod navigation;
 #[cfg(any(test, feature = "ai-bench"))]
@@ -56,6 +62,13 @@ const EMPLACEMENT_TURN_RATE: f32 = 1.6;
 // Shells hit infantry within this radius of the target for a share of damage.
 const EMPLACEMENT_SPLASH_RADIUS: f32 = 2.5;
 const EMPLACEMENT_SPLASH_SHARE: f32 = 0.5;
+const ORE_DEPOT_COST: f32 = 220.0;
+const ORE_DEPOT_BUILD_TIME: f32 = 10.0;
+const ORE_DEPOT_HEALTH: f32 = 300.0;
+const ORE_DEPOT_CAPACITY: f32 = 200.0;
+const ORE_DEPOT_RATE: f32 = 12.5;
+const ORE_DEPOT_UNLOAD_DURATION: f32 = 1.5;
+const ORE_DEPOT_UNLOAD_REACH: f32 = 1.8;
 // Command centers provide short-range point defense.
 const COMMAND_RANGE: f32 = 11.0;
 const COMMAND_DAMAGE: f32 = 18.0;
@@ -261,19 +274,32 @@ pub enum UnitState {
     Garrison,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BuildingKind {
     Command,
     Barracks,
     Factory,
     Refinery,
     Emplacement,
+    OreDepot,
 }
 
 impl BuildingKind {
     /// Structures a command center constructs on their own site in Standard.
     pub const SITE_STRUCTURES: [Self; 3] = [Self::Refinery, Self::Barracks, Self::Factory];
+
+    fn is_pad_structure(self) -> bool {
+        matches!(self, Self::Emplacement | Self::OreDepot)
+    }
+
+    fn parse_pad(s: &str) -> Option<Self> {
+        match s {
+            "emplacement" => Some(Self::Emplacement),
+            "ore_depot" => Some(Self::OreDepot),
+            _ => None,
+        }
+    }
 
     fn parse_structure(s: &str) -> Option<Self> {
         match s {
@@ -290,6 +316,7 @@ impl BuildingKind {
             Self::Factory => 1000.0,
             Self::Refinery => 900.0,
             Self::Emplacement => EMPLACEMENT_HEALTH,
+            Self::OreDepot => ORE_DEPOT_HEALTH,
         }
     }
     /// Construction price; a refinery includes its free collector.
@@ -299,6 +326,7 @@ impl BuildingKind {
             Self::Refinery => 600.0,
             Self::Factory => 800.0,
             Self::Emplacement => EMPLACEMENT_COST,
+            Self::OreDepot => ORE_DEPOT_COST,
             Self::Command => f32::INFINITY,
         }
     }
@@ -308,6 +336,7 @@ impl BuildingKind {
             Self::Refinery => 20.0,
             Self::Factory => 25.0,
             Self::Emplacement => EMPLACEMENT_BUILD_TIME,
+            Self::OreDepot => ORE_DEPOT_BUILD_TIME,
             Self::Command => f32::INFINITY,
         }
     }
@@ -318,7 +347,7 @@ impl BuildingKind {
             Self::Barracks => (-10.0, z),
             Self::Factory => (10.0, z),
             Self::Refinery => (0.0, z.signum() * 50.0),
-            Self::Command | Self::Emplacement => (0.0, z),
+            Self::Command | Self::Emplacement | Self::OreDepot => (0.0, z),
         }
     }
 }
@@ -377,6 +406,8 @@ pub struct Unit {
     #[serde(skip)]
     deposit: Option<u32>,
     #[serde(skip)]
+    unload_target: Option<u32>,
+    #[serde(skip)]
     rally_x: f32,
     #[serde(skip)]
     rally_z: f32,
@@ -416,8 +447,30 @@ pub struct Building {
     /// Total construction time, for progress displays; zero for starting buildings.
     pub construction_time: f32,
     pub facing: f32,
+    pub stored_ore: f32,
     #[serde(skip)]
     cooldown: f32,
+}
+
+impl Building {
+    /// Conveyor throughput in credits per second, slowed permanently by Battle Damage.
+    pub(super) fn conveyor_rate(&self) -> f32 {
+        if self.kind != BuildingKind::OreDepot
+            || self.hp <= 0.0
+            || self.construction_remaining > 0.0
+        {
+            return 0.0;
+        }
+        let health = self.hp / self.max_hp;
+        ORE_DEPOT_RATE
+            * if health <= CRITICAL_HEALTH {
+                CRITICAL_SPEED
+            } else if health <= DAMAGED_HEALTH {
+                DAMAGED_SPEED
+            } else {
+                1.0
+            }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -508,6 +561,9 @@ pub struct Game {
     ai_credits: f32,
     #[serde(skip)]
     hard_commanders: [ai::HardCommander; 2],
+    #[cfg(any(test, feature = "ai-bench"))]
+    #[serde(skip)]
+    pub(super) allow_ai_ore_depots: [bool; 2],
 }
 
 impl Default for Game {
@@ -600,6 +656,8 @@ impl Game {
                 ai::HardCommander::new(seed ^ 0xa341316c),
                 ai::HardCommander::new(seed ^ 0xc8013ea4),
             ],
+            #[cfg(any(test, feature = "ai-bench"))]
+            allow_ai_ore_depots: [true, true],
         };
         for team in [Team::Player, Team::Enemy] {
             let (x, z) = BuildingKind::Command.home(team);
@@ -695,33 +753,148 @@ impl Game {
             } else {
                 std::f32::consts::PI
             },
+            stored_ore: 0.0,
             cooldown: 0.0,
         });
     }
-    /// Fixed pads are terrain, not targets. A purchased gun is a normal,
-    /// destructible structure from the moment construction starts.
+    /// Fixed pads are terrain, not targets. A purchased pad structure is a normal,
+    /// destructible building from the moment construction starts.
     pub fn build_emplacement(&mut self, slot: usize) {
         if !self.demo {
-            self.build_emplacement_for(Team::Player, slot);
+            self.build_pad_for(Team::Player, BuildingKind::Emplacement, Some(slot));
+        }
+    }
+
+    pub fn build_pad(&mut self, kind: &str) {
+        if self.demo {
+            return;
+        }
+        if let Some(kind) = BuildingKind::parse_pad(kind) {
+            self.build_pad_for(Team::Player, kind, None);
         }
     }
 
     fn build_emplacement_for(&mut self, team: Team, slot: usize) -> bool {
-        if self.outcome != Outcome::Playing
-            || !self.alive_building(team, BuildingKind::Command)
+        self.build_pad_for(team, BuildingKind::Emplacement, Some(slot))
+    }
+
+    pub(super) fn has_collector_or_queued(&self, team: Team) -> bool {
+        self.units
+            .iter()
+            .any(|u| u.team == team && u.kind == UnitKind::Collector && u.hp > 0.0)
             || self
-                .buildings
-                .iter()
-                .any(|b| b.team == team && b.hp > 0.0 && b.defense_slot == Some(slot))
+                .production_queue(team, BuildingKind::Factory)
+                .contains(&UnitKind::Collector)
+    }
+
+    fn pad_occupied(&self, team: Team, slot: usize) -> bool {
+        self.buildings
+            .iter()
+            .any(|b| b.team == team && b.hp > 0.0 && b.defense_slot == Some(slot))
+    }
+
+    fn choose_pad_slot(&self, team: Team, kind: BuildingKind) -> Option<DefenseSlot> {
+        let open: Vec<DefenseSlot> = self
+            .defense_slots
+            .iter()
+            .copied()
+            .filter(|p| p.team == team && !self.pad_occupied(team, p.slot))
+            .collect();
+        if open.is_empty() {
+            return None;
+        }
+        match kind {
+            BuildingKind::OreDepot => {
+                let own_half = |o: &OreDeposit| {
+                    if team == Team::Player {
+                        o.z >= 0.0
+                    } else {
+                        o.z <= 0.0
+                    }
+                };
+                let flank_score = |p: DefenseSlot| {
+                    let sign = p.x.signum();
+                    let half_ore: f32 = self
+                        .ore
+                        .iter()
+                        .filter(|o| o.amount > 0.0 && o.x.signum() == sign && own_half(o))
+                        .map(|o| o.amount)
+                        .sum();
+                    let total_ore: f32 = self
+                        .ore
+                        .iter()
+                        .filter(|o| o.amount > 0.0 && o.x.signum() == sign)
+                        .map(|o| o.amount)
+                        .sum();
+                    let has_collector = self.units.iter().any(|u| {
+                        u.team == team
+                            && u.kind == UnitKind::Collector
+                            && u.on_field()
+                            && u.deposit
+                                .and_then(|id| self.ore.iter().find(|o| o.id == id))
+                                .is_some_and(|o| o.x.signum() == sign)
+                    });
+                    (half_ore, total_ore, has_collector as u8, p.slot)
+                };
+                open.into_iter().max_by(|&a, &b| {
+                    let ka = flank_score(a);
+                    let kb = flank_score(b);
+                    ka.0.total_cmp(&kb.0)
+                        .then_with(|| ka.1.total_cmp(&kb.1))
+                        .then_with(|| ka.2.cmp(&kb.2))
+                        .then_with(|| ka.3.cmp(&kb.3))
+                })
+            }
+            BuildingKind::Emplacement => {
+                let threat = |p: DefenseSlot| -> f32 {
+                    self.units
+                        .iter()
+                        .filter(|u| {
+                            u.team != team && u.on_field() && u.kind != UnitKind::Collector
+                        })
+                        .map(|u| {
+                            u.kind.cost() * (u.hp / u.max_hp).clamp(0.0, 1.0)
+                                / (1.0 + distance_sq(p.x, p.z, u.x, u.z).sqrt())
+                        })
+                        .sum()
+                };
+                open.into_iter().max_by(|&a, &b| {
+                    threat(a)
+                        .total_cmp(&threat(b))
+                        .then_with(|| b.slot.cmp(&a.slot))
+                })
+            }
+            _ => None,
+        }
+    }
+
+    pub(super) fn build_pad_for(
+        &mut self,
+        team: Team,
+        kind: BuildingKind,
+        slot: Option<usize>,
+    ) -> bool {
+        if self.outcome != Outcome::Playing
+            || !kind.is_pad_structure()
+            || !self.alive_building(team, BuildingKind::Command)
         {
             return false;
         }
-        let Some(pad) = self
-            .defense_slots
-            .iter()
-            .find(|p| p.team == team && p.slot == slot)
-            .copied()
-        else {
+        if kind == BuildingKind::OreDepot
+            && (!self.alive_building(team, BuildingKind::Refinery)
+                || !self.has_collector_or_queued(team))
+        {
+            return false;
+        }
+        let pad = match slot {
+            Some(s) => self
+                .defense_slots
+                .iter()
+                .find(|p| p.team == team && p.slot == s && !self.pad_occupied(team, p.slot))
+                .copied(),
+            None => self.choose_pad_slot(team, kind),
+        };
+        let Some(pad) = pad else {
             return false;
         };
         let credits = if team == Team::Player {
@@ -729,21 +902,15 @@ impl Game {
         } else {
             &mut self.ai_credits
         };
-        if *credits < EMPLACEMENT_COST {
+        if *credits < kind.cost() {
             return false;
         }
-        *credits -= EMPLACEMENT_COST;
-        self.add_building(
-            team,
-            BuildingKind::Emplacement,
-            pad.x,
-            pad.z,
-            EMPLACEMENT_HEALTH,
-        );
-        let gun = self.buildings.last_mut().unwrap();
-        gun.defense_slot = Some(slot);
-        gun.construction_remaining = EMPLACEMENT_BUILD_TIME;
-        gun.construction_time = EMPLACEMENT_BUILD_TIME;
+        *credits -= kind.cost();
+        self.add_building(team, kind, pad.x, pad.z, kind.health());
+        let structure = self.buildings.last_mut().unwrap();
+        structure.defense_slot = Some(pad.slot);
+        structure.construction_remaining = kind.build_time();
+        structure.construction_time = kind.build_time();
         true
     }
 
@@ -757,13 +924,13 @@ impl Game {
         }
     }
 
-    /// The structure a side's command center is building, if any. Guns build
-    /// on their own pads and never occupy the command center.
+    /// The structure a side's command center is building, if any. Pad structures
+    /// build on their own pads and never occupy the command center.
     fn active_construction(&self, team: Team) -> Option<&Building> {
         self.buildings.iter().find(|b| {
             b.team == team
                 && b.hp > 0.0
-                && b.kind != BuildingKind::Emplacement
+                && !b.kind.is_pad_structure()
                 && b.construction_remaining > 0.0
         })
     }
@@ -805,7 +972,7 @@ impl Game {
     fn advance_construction(&mut self, dt: f32) {
         let mut refineries = Vec::new();
         for b in &mut self.buildings {
-            if b.kind == BuildingKind::Emplacement || b.construction_remaining <= 0.0 {
+            if b.kind.is_pad_structure() || b.construction_remaining <= 0.0 {
                 continue;
             }
             b.construction_remaining = (b.construction_remaining - dt).max(0.0);
@@ -821,6 +988,41 @@ impl Game {
             collector.state = UnitState::Harvest;
             collector.x = x + 6.5;
             collector.z = z;
+        }
+    }
+
+    /// Advance Ore Depot construction and stream buffered ore along conveyor belts.
+    fn advance_depots(&mut self, dt: f32) {
+        let player_refinery = self.alive_building(Team::Player, BuildingKind::Refinery);
+        let enemy_refinery = self.alive_building(Team::Enemy, BuildingKind::Refinery);
+        for b in &mut self.buildings {
+            if b.kind != BuildingKind::OreDepot || b.hp <= 0.0 {
+                continue;
+            }
+            if b.construction_remaining > 0.0 {
+                b.construction_remaining = (b.construction_remaining - dt).max(0.0);
+                continue;
+            }
+            let has_refinery = match b.team {
+                Team::Player => player_refinery,
+                Team::Enemy => enemy_refinery,
+            };
+            if !has_refinery || b.stored_ore <= 0.0 {
+                continue;
+            }
+            let credits = if b.team == Team::Player {
+                &mut self.credits
+            } else {
+                &mut self.ai_credits
+            };
+            let room = (CREDIT_CAP - *credits).max(0.0);
+            if room <= 0.0 {
+                continue;
+            }
+            let rate = b.conveyor_rate();
+            let transfer = (rate * dt).min(b.stored_ore).min(room);
+            b.stored_ore -= transfer;
+            *credits += transfer;
         }
     }
 
@@ -894,6 +1096,7 @@ impl Game {
             fuse: demolition::Fuse::default(),
             navigation: navigation::Navigation::default(),
             deposit: None,
+            unload_target: None,
             rally_x,
             rally_z,
             triaged: state == UnitState::Attack,
@@ -1063,6 +1266,7 @@ impl Game {
         self.credits = (self.credits + income).min(CREDIT_CAP);
         self.ai_credits = (self.ai_credits + income).min(CREDIT_CAP);
         self.advance_construction(dt);
+        self.advance_depots(dt);
         self.harvest_and_unload(dt);
         self.ai_decision_timer -= dt;
         self.ai_wave_timer -= dt;
@@ -1225,7 +1429,11 @@ impl Game {
         {
             return 0.0;
         }
-        let Some(next) = BuildingKind::SITE_STRUCTURES
+        if self.difficulty == Difficulty::Hard && self.hard_emergency_defense(team) {
+            return 0.0;
+        }
+        let site_order = self.ai_site_order(team);
+        let Some(next) = site_order
             .into_iter()
             .find(|&kind| !self.standing(team, kind))
         else {
@@ -1233,7 +1441,7 @@ impl Game {
         };
         let mut next = Some(next);
         if self.active_construction(team).is_none() && self.construct_for(team, next.unwrap()) {
-            next = BuildingKind::SITE_STRUCTURES
+            next = site_order
                 .into_iter()
                 .find(|&kind| !self.standing(team, kind));
         }
@@ -1242,6 +1450,43 @@ impl Game {
         } else {
             self.ai_credits
         };
+        if self.difficulty == Difficulty::Hard {
+            if let Some(reserve) = self.hard_construction_reserve(team, next, credits) {
+                return reserve;
+            }
+        } else if self.difficulty == Difficulty::Medium {
+            #[cfg(any(test, feature = "ai-bench"))]
+            let depot_allowed =
+                self.allow_ai_ore_depots[if team == Team::Player { 0 } else { 1 }];
+            #[cfg(not(any(test, feature = "ai-bench")))]
+            let depot_allowed = true;
+            if depot_allowed {
+                if let Some(active) = self.active_construction(team) {
+                    if active.kind == BuildingKind::Barracks
+                        && self.alive_building(team, BuildingKind::Refinery)
+                        && !self.standing(team, BuildingKind::OreDepot)
+                        && self.has_collector_or_queued(team)
+                    {
+                        let direction = if team == Team::Enemy { 1.0 } else { -1.0 };
+                        let opponent = if team == Team::Player {
+                            Team::Enemy
+                        } else {
+                            Team::Player
+                        };
+                        let pad_threatened = self.units.iter().any(|u| {
+                            u.team != team
+                                && u.on_field()
+                                && u.kind != UnitKind::Collector
+                                && u.z * direction < -10.0
+                        });
+                        if !pad_threatened && !self.alive_building(opponent, BuildingKind::Barracks)
+                        {
+                            return 0.0;
+                        }
+                    }
+                }
+            }
+        }
         next.map_or(0.0, |kind| kind.cost().min(credits))
     }
 
@@ -1290,6 +1535,23 @@ impl Game {
             && self.ore.iter().any(|o| o.amount > 0.0);
         if wants_collector {
             self.queue_unit(team, UnitKind::Collector);
+        }
+        let threatened_early = self.units.iter().any(|u| {
+            u.team == opponent
+                && u.on_field()
+                && u.kind != UnitKind::Collector
+                && u.z * direction < -10.0
+        });
+        if !threatened_early && self.team_mode(team) != Mode::Retreat {
+            self.prepare_ore_depot(team);
+            let credits = if team == Team::Player {
+                self.credits
+            } else {
+                self.ai_credits
+            };
+            if credits >= 100.0 && self.should_buy_ore_depot(team) {
+                return;
+            }
         }
         // The whole battlefield is visible, but opposing queues and sheltered
         // units are private. Only our own committed production informs planning.
@@ -1512,16 +1774,57 @@ impl Game {
         {
             self.queue_unit(team, UnitKind::Tank);
         }
+        if !threatened && !retreating {
+            self.prepare_ore_depot_with_surplus(team, true);
+        }
     }
     fn harvest_and_unload(&mut self, dt: f32) {
+        #[derive(Clone, Copy)]
+        struct UnloadSite {
+            idx: usize,
+            id: u32,
+            kind: BuildingKind,
+            x: f32,
+            z: f32,
+            reach: f32,
+            duration: f32,
+        }
+        let unload_site = |idx: usize, b: &Building| -> UnloadSite {
+            if b.kind == BuildingKind::OreDepot {
+                let (x, z) = depot_unload_point(b);
+                UnloadSite {
+                    idx,
+                    id: b.id,
+                    kind: b.kind,
+                    x,
+                    z,
+                    reach: ORE_DEPOT_UNLOAD_REACH,
+                    duration: ORE_DEPOT_UNLOAD_DURATION,
+                }
+            } else {
+                UnloadSite {
+                    idx,
+                    id: b.id,
+                    kind: b.kind,
+                    x: b.x,
+                    z: b.z,
+                    reach: UNLOAD_REACH,
+                    duration: UNLOAD_DURATION,
+                }
+            }
+        };
         let mut snapshot = self.units.clone();
-        for (index, unit) in self.units.iter_mut().enumerate() {
+        let ore = &mut self.ore;
+        let buildings = &mut self.buildings;
+        let units = &mut self.units;
+        let credits = &mut self.credits;
+        let ai_credits = &mut self.ai_credits;
+        for (index, unit) in units.iter_mut().enumerate() {
             if unit.kind != UnitKind::Collector || !unit.on_field() {
                 continue;
             }
             navigation::hold(unit);
-            let refinery = self
-                .buildings
+            let refinery = buildings
                 .iter()
                 .filter(|b| {
                     b.team == unit.team
@@ -1532,27 +1835,91 @@ impl Game {
                 .min_by(|a, b| {
                     distance_sq(unit.x, unit.z, a.x, a.z)
                         .total_cmp(&distance_sq(unit.x, unit.z, b.x, b.z))
-                });
+                })
+                .cloned();
             let Some(refinery) = refinery else {
                 unit.unload_progress = 0.0;
+                unit.unload_target = None;
                 continue;
             };
+            if !unit.returning {
+                unit.unload_target = None;
+                snapshot[index].unload_target = None;
+            }
             let mut deposit = unit
                 .deposit
-                .and_then(|id| self.ore.iter().position(|o| o.id == id && o.amount > 0.0));
+                .and_then(|id| ore.iter().position(|o| o.id == id && o.amount > 0.0));
             if deposit.is_none() && !unit.returning {
-                deposit =
-                    choose_deposit(&self.ore, unit, refinery, &snapshot, &self.buildings, None);
-                unit.deposit = deposit.map(|i| self.ore[i].id);
+                deposit = choose_deposit(ore, unit, &refinery, &snapshot, buildings, None);
+                unit.deposit = deposit.map(|i| ore[i].id);
                 // Collectors choosing later in this step see the choice.
                 snapshot[index].deposit = unit.deposit;
             }
             unit.returning |=
                 unit.cargo >= COLLECTOR_CAPACITY || (deposit.is_none() && unit.cargo > 0.0);
-            let (x, z, stopping_distance) = if unit.returning {
-                (refinery.x, refinery.z, UNLOAD_REACH)
+            let target_site = if unit.returning {
+                let depot_has_room = |d: &Building| {
+                    let reserved: f32 = snapshot
+                        .iter()
+                        .filter(|other| {
+                            other.id != unit.id
+                                && other.team == unit.team
+                                && other.kind == UnitKind::Collector
+                                && other.on_field()
+                                && other.returning
+                                && other.unload_target == Some(d.id)
+                        })
+                        .map(|other| other.cargo)
+                        .sum();
+                    d.stored_ore + reserved <= ORE_DEPOT_CAPACITY - unit.cargo + 0.001
+                };
+                let kept = unit.unload_target.and_then(|target_id| {
+                    buildings
+                        .iter()
+                        .enumerate()
+                        .find(|(_, b)| {
+                            b.id == target_id
+                                && b.team == unit.team
+                                && b.hp > 0.0
+                                && b.construction_remaining <= 0.0
+                                && (b.kind == BuildingKind::Refinery
+                                    || (b.kind == BuildingKind::OreDepot
+                                        && (unit.unload_progress > 0.0 || depot_has_room(b))))
+                        })
+                        .map(|(idx, b)| unload_site(idx, b))
+                });
+                if let Some(site) = kept {
+                    Some(site)
+                } else {
+                    unit.unload_progress = 0.0;
+                    let chosen = buildings
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, b)| {
+                            b.team == unit.team
+                                && b.hp > 0.0
+                                && b.construction_remaining <= 0.0
+                                && (b.kind == BuildingKind::Refinery
+                                    || (b.kind == BuildingKind::OreDepot && depot_has_room(b)))
+                        })
+                        .map(|(idx, b)| unload_site(idx, b))
+                        .min_by(|a, b| {
+                            distance_sq(unit.x, unit.z, a.x, a.z)
+                                .total_cmp(&distance_sq(unit.x, unit.z, b.x, b.z))
+                        });
+                    if let Some(site) = chosen {
+                        unit.unload_target = Some(site.id);
+                        snapshot[index].unload_target = unit.unload_target;
+                    }
+                    chosen
+                }
+            } else {
+                None
+            };
+            let (x, z, stopping_distance) = if let Some(site) = target_site {
+                (site.x, site.z, site.reach)
             } else if let Some(i) = deposit {
-                (self.ore[i].x, self.ore[i].z, MINING_REACH)
+                (ore[i].x, ore[i].z, MINING_REACH)
             } else {
                 continue;
             };
@@ -1572,51 +1939,50 @@ impl Game {
                     stopping_distance,
                     dt,
                     &snapshot,
-                    &self.buildings,
+                    buildings,
                     right_of_way,
                 );
-            } else if unit.returning {
+            } else if let Some(site) = target_site {
                 // Keep the load and hold position while the hopper tips, pours,
-                // and lowers. Credit it once the visible delivery is finished.
-                unit.unload_progress = (unit.unload_progress + dt / UNLOAD_DURATION).min(1.0);
+                // and lowers. Credit or store once the visible delivery is finished.
+                unit.unload_progress = (unit.unload_progress + dt / site.duration).min(1.0);
                 if unit.unload_progress < 1.0 {
                     continue;
                 }
-                if unit.team == Team::Player {
-                    self.credits = (self.credits + unit.cargo).min(CREDIT_CAP);
+                if site.kind == BuildingKind::OreDepot {
+                    buildings[site.idx].stored_ore =
+                        (buildings[site.idx].stored_ore + unit.cargo).min(ORE_DEPOT_CAPACITY);
+                } else if unit.team == Team::Player {
+                    *credits = (*credits + unit.cargo).min(CREDIT_CAP);
                 } else {
-                    self.ai_credits = (self.ai_credits + unit.cargo).min(CREDIT_CAP);
+                    *ai_credits = (*ai_credits + unit.cargo).min(CREDIT_CAP);
                 }
                 unit.cargo = 0.0;
                 unit.returning = false;
                 unit.unload_progress = 0.0;
+                unit.unload_target = None;
+                snapshot[index].cargo = 0.0;
+                snapshot[index].returning = false;
+                snapshot[index].unload_target = None;
                 // Collectors rebalance between deposits after each delivery.
-                let next = choose_deposit(
-                    &self.ore,
-                    unit,
-                    refinery,
-                    &snapshot,
-                    &self.buildings,
-                    deposit,
-                );
-                unit.deposit = next.map(|i| self.ore[i].id);
+                let next = choose_deposit(ore, unit, &refinery, &snapshot, buildings, deposit);
+                unit.deposit = next.map(|i| ore[i].id);
                 snapshot[index].deposit = unit.deposit;
             } else if let Some(i) = deposit {
-                let ore = &mut self.ore[i];
+                let deposit_ore = &mut ore[i];
                 let mined = (MINING_RATE * dt)
-                    .min(ore.amount)
+                    .min(deposit_ore.amount)
                     .min(COLLECTOR_CAPACITY - unit.cargo);
                 unit.cargo += mined;
-                ore.amount -= mined;
+                deposit_ore.amount -= mined;
                 unit.returning = unit.cargo >= COLLECTOR_CAPACITY;
-                if ore.amount <= 0.0 && !unit.returning {
+                if deposit_ore.amount <= 0.0 && !unit.returning {
                     // The deposit ran out: fill up at another one when that
                     // is worth the detour, or deliver a part load.
-                    let next =
-                        choose_deposit(&self.ore, unit, refinery, &snapshot, &self.buildings, None);
+                    let next = choose_deposit(ore, unit, &refinery, &snapshot, buildings, None);
                     unit.returning = !next
-                        .is_some_and(|j| tops_up(unit, &self.ore[j], refinery, &self.buildings));
-                    unit.deposit = next.map(|j| self.ore[j].id);
+                        .is_some_and(|j| tops_up(ore, unit, &ore[j], &refinery, &snapshot, buildings));
+                    unit.deposit = next.map(|j| ore[j].id);
                     snapshot[index].deposit = unit.deposit;
                 }
             }
@@ -1775,13 +2141,13 @@ impl Game {
                     unit_damage[j] += unit.kind.damage(Some(snapshot[j].kind));
                 } else {
                     let (j, _) = target_building.unwrap();
-                    building_damage[j] += if buildings[j].kind == BuildingKind::Emplacement
-                        && unit.kind == UnitKind::Soldier
-                    {
-                        24.0
-                    } else {
-                        unit.kind.damage(None)
-                    };
+                    building_damage[j] +=
+                        if buildings[j].kind.is_pad_structure() && unit.kind == UnitKind::Soldier
+                        {
+                            24.0
+                        } else {
+                            unit.kind.damage(None)
+                        };
                 }
                 let (target_id, target_x, target_y, target_z) = if let Some(j) = firing_target {
                     (snapshot[j].id, snapshot[j].x, 1.1, snapshot[j].z)
@@ -2098,8 +2464,33 @@ const SHARED_FLANK: f32 = 18.0;
 // After a delivery, a collector changes deposits only for this gain per load.
 const SWITCH_GAIN: f32 = 2.0;
 
+fn depot_unload_point(b: &Building) -> (f32, f32) {
+    (b.x + b.x.signum() * 3.5, b.z)
+}
+
+fn drop_off_for_deposit(
+    flank_east: bool,
+    team: Team,
+    refinery: &Building,
+    buildings: &[Building],
+    same_flank_others: usize,
+) -> ((f32, f32), f32, bool) {
+    if same_flank_others == 0 {
+        if let Some(depot) = buildings.iter().find(|b| {
+            b.team == team
+                && b.kind == BuildingKind::OreDepot
+                && b.hp > 0.0
+                && b.construction_remaining <= 0.0
+                && (b.x > refinery.x) == flank_east
+        }) {
+            return (depot_unload_point(depot), ORE_DEPOT_UNLOAD_REACH, true);
+        }
+    }
+    ((refinery.x, refinery.z), UNLOAD_REACH, false)
+}
+
 /// The deposit for a collector's next load: the cheapest per load, counting
-/// the drive to it from where the collector is and on to the refinery by road,
+/// the drive to it from where the collector is and on to the drop-off by road,
 /// the other collectors sharing it or its flank, and how much of a load it
 /// still holds once those working it have theirs.
 fn choose_deposit(
@@ -2112,7 +2503,6 @@ fn choose_deposit(
 ) -> Option<usize> {
     let roads = navigation::Roads::new(buildings, unit);
     let here = (unit.x, unit.z);
-    let home = (refinery.x, refinery.z);
     let east = |o: &OreDeposit| o.x > refinery.x;
     let others: Vec<_> = units
         .iter()
@@ -2127,20 +2517,28 @@ fn choose_deposit(
     let cost = |i: usize| {
         let o = &ore[i];
         let at = (o.x, o.z);
-        let trip = roads.distance(at, home, UNLOAD_REACH);
-        let reach = roads.distance(here, at, MINING_REACH);
+        let flank_east = east(o);
         let sharing = others.iter().filter(|(_, d)| d.id == o.id).count();
         let flank = others
             .iter()
-            .filter(|(u, d)| u.team == unit.team && east(d) == east(o))
+            .filter(|(u, d)| u.team == unit.team && east(d) == flank_east)
             .count();
+        let (drop_point, drop_reach, using_depot) =
+            drop_off_for_deposit(flank_east, unit.team, refinery, buildings, flank);
+        let trip = roads.distance(at, drop_point, drop_reach);
+        let reach = roads.distance(here, at, MINING_REACH);
         let reserved: f32 = others
             .iter()
             .filter(|(u, d)| d.id == o.id && !u.returning)
             .map(|(u, _)| COLLECTOR_CAPACITY - u.cargo)
             .sum();
         let load = ((o.amount - reserved) / COLLECTOR_CAPACITY).clamp(0.1, 1.0);
-        let drive = reach + trip + sharing as f32 * SHARED_DEPOSIT + flank as f32 * SHARED_FLANK;
+        let flank_penalty = if using_depot {
+            0.0
+        } else {
+            flank as f32 * SHARED_FLANK
+        };
+        let drive = reach + trip + sharing as f32 * SHARED_DEPOSIT + flank_penalty;
         drive / load - if current == Some(i) { SWITCH_GAIN } else { 0.0 }
     };
     (0..ore.len())
@@ -2153,12 +2551,51 @@ fn choose_deposit(
 
 // A collector with a part load fills up at `next` first when the detour is
 // shorter than the unused share of a round trip from there.
-fn tops_up(unit: &Unit, next: &OreDeposit, refinery: &Building, buildings: &[Building]) -> bool {
+fn tops_up(
+    ore: &[OreDeposit],
+    unit: &Unit,
+    next: &OreDeposit,
+    refinery: &Building,
+    units: &[Unit],
+    buildings: &[Building],
+) -> bool {
     let roads = navigation::Roads::new(buildings, unit);
-    let (here, at, home) = ((unit.x, unit.z), (next.x, next.z), (refinery.x, refinery.z));
-    let trip = roads.distance(at, home, UNLOAD_REACH);
-    let detour =
-        roads.distance(here, at, MINING_REACH) + trip - roads.distance(here, home, UNLOAD_REACH);
+    let (here, at) = ((unit.x, unit.z), (next.x, next.z));
+    let same_flank_others = |east_flank: bool| {
+        units
+            .iter()
+            .filter(|u| {
+                u.id != unit.id
+                    && u.team == unit.team
+                    && u.kind == UnitKind::Collector
+                    && u.on_field()
+            })
+            .filter_map(|u| {
+                let id = u.deposit?;
+                ore.iter().find(|o| o.id == id && o.amount > 0.0)
+            })
+            .filter(|o| (o.x > refinery.x) == east_flank)
+            .count()
+    };
+    let (next_drop, next_reach, _) = drop_off_for_deposit(
+        next.x > refinery.x,
+        unit.team,
+        refinery,
+        buildings,
+        same_flank_others(next.x > refinery.x),
+    );
+    let (here_drop, here_reach, _) = drop_off_for_deposit(
+        unit.x > refinery.x,
+        unit.team,
+        refinery,
+        buildings,
+        same_flank_others(unit.x > refinery.x),
+    );
+    let trip = roads.distance(at, next_drop, next_reach);
+    let direct = roads
+        .distance(here, (refinery.x, refinery.z), UNLOAD_REACH)
+        .min(roads.distance(here, here_drop, here_reach));
+    let detour = roads.distance(here, at, MINING_REACH) + trip - direct;
     detour < (1.0 - unit.cargo / COLLECTOR_CAPACITY) * 2.0 * trip
 }
 
@@ -2173,7 +2610,7 @@ fn building_half_size(kind: BuildingKind) -> (f32, f32) {
         BuildingKind::Barracks => (2.85, 2.65),
         BuildingKind::Factory => (3.225, 3.05),
         BuildingKind::Refinery => (3.55, 2.8),
-        BuildingKind::Emplacement => (1.7, 1.7),
+        BuildingKind::Emplacement | BuildingKind::OreDepot => (1.7, 1.7),
     }
 }
 

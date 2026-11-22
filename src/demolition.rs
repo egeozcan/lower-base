@@ -38,14 +38,15 @@ pub(super) struct Fuse {
     waiting: f32,
 }
 
-/// Credits a blast at `at` destroys, by health removed: opposing units and
-/// structures, minus `team`'s own. The truck itself is excluded.
+/// Credits a blast at `at` destroys after `eta` seconds, by health removed:
+/// opposing units and structures, minus `team`'s own. The truck itself is excluded.
 fn blast_value(
     units: &[Unit],
     buildings: &[Building],
     team: Team,
     truck: u32,
     at: (f32, f32),
+    eta: f32,
 ) -> f32 {
     let units = units
         .iter()
@@ -61,7 +62,7 @@ fn blast_value(
         });
     let buildings = buildings.iter().filter(|b| b.hp > 0.0).map(|b| {
         let damage = demolition_damage(footprint_distance(b, at.0, at.1));
-        let value = structure_value(b, damage);
+        let value = structure_value(b, damage, eta);
         if b.team == team {
             -value
         } else {
@@ -71,13 +72,19 @@ fn blast_value(
     units.chain(buildings).sum()
 }
 
-/// Credits of a structure that `damage` destroys. Guns are worth their price.
-/// Other structures cannot be rebuilt but keep working until destroyed, so
-/// damage counts for little unless it finishes one, which is worth half a
-/// credit per hit point of the original structure.
-fn structure_value(b: &Building, damage: f32) -> f32 {
+/// Credits of a structure that `damage` destroys after `eta` seconds. Guns are
+/// worth their price; ore depots add their unconveyed buffered ore when
+/// destroyed. Other structures cannot be rebuilt but keep working until
+/// destroyed, so damage counts for little unless it finishes one, which is worth
+/// half a credit per hit point of the original structure.
+fn structure_value(b: &Building, damage: f32, eta: f32) -> f32 {
     match b.kind {
         BuildingKind::Emplacement => EMPLACEMENT_COST * damage.min(b.hp) / b.max_hp,
+        BuildingKind::OreDepot => {
+            let hull = ORE_DEPOT_COST * damage.min(b.hp) / b.max_hp;
+            let remaining = (b.stored_ore - b.conveyor_rate() * eta).max(0.0);
+            hull + if damage >= b.hp { remaining } else { 0.0 }
+        }
         _ if damage >= b.hp => 0.25 * b.hp + 0.5 * b.max_hp,
         _ => 0.25 * damage,
     }
@@ -285,9 +292,11 @@ fn strikes(units: &[Unit], buildings: &[Building], truck: &Unit) -> Vec<Strike> 
                 }
             }
             let at = |d: f32| (from.0 + dir.0 * d, from.1 + dir.1 * d);
-            let reach = blast_value(units, buildings, team, truck, at(travel));
-            let expected =
-                destroyed_at.map_or(reach, |d| blast_value(units, buildings, team, truck, at(d)));
+            let pace = speed.max(0.1);
+            let reach = blast_value(units, buildings, team, truck, at(travel), travel / pace);
+            let expected = destroyed_at.map_or(reach, |d| {
+                blast_value(units, buildings, team, truck, at(d), d / pace)
+            });
             Strike {
                 id,
                 x,
@@ -357,7 +366,7 @@ fn choose(unit: &Unit, units: &[Unit], buildings: &[Building]) -> Option<Strike>
 pub(super) fn drive(unit: &mut Unit, dt: f32, units: &[Unit], buildings: &[Building]) -> bool {
     let target = choose(unit, units, buildings);
     unit.fuse.aim = target.map(|s| s.id);
-    let here = blast_value(units, buildings, unit.team, unit.id, (unit.x, unit.z));
+    let here = blast_value(units, buildings, unit.team, unit.id, (unit.x, unit.z), 0.0);
     let fuse = &mut unit.fuse;
     if here <= 0.0 {
         fuse.best = 0.0;

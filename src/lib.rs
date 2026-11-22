@@ -65,6 +65,10 @@ impl GameBridge {
         self.game.build_emplacement(slot);
     }
 
+    pub fn build_pad(&mut self, kind: &str) {
+        self.game.build_pad(kind);
+    }
+
     pub fn construct(&mut self, kind: &str) {
         self.game.construct(kind);
     }

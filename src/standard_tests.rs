@@ -188,8 +188,14 @@ fn every_finished_refinery_brings_one_mining_collector() {
 
 #[test]
 fn every_difficulty_builds_its_base_in_order_and_plays_on() {
+    let mut hard_orders = std::collections::HashSet::new();
     for difficulty in [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard] {
-        for seed in [3, 11] {
+        let seeds = if difficulty == Difficulty::Hard {
+            vec![0, 1, 2, 3, 4, 5, 11]
+        } else {
+            vec![3, 11]
+        };
+        for seed in seeds {
             let mut game = Game::demo_with_options(seed, difficulty, GameMode::Standard);
             let mut order = [Vec::new(), Vec::new()];
             for _ in 0..(150.0 / 0.05) as usize {
@@ -197,7 +203,7 @@ fn every_difficulty_builds_its_base_in_order_and_plays_on() {
                 for (i, team) in [Team::Player, Team::Enemy].into_iter().enumerate() {
                     for b in game.buildings.iter().filter(|b| b.team == team) {
                         if b.kind != BuildingKind::Command
-                            && b.kind != BuildingKind::Emplacement
+                            && !b.kind.is_pad_structure()
                             && !order[i].contains(&b.kind)
                         {
                             order[i].push(b.kind);
@@ -206,11 +212,27 @@ fn every_difficulty_builds_its_base_in_order_and_plays_on() {
                 }
             }
             for (i, team) in [Team::Player, Team::Enemy].into_iter().enumerate() {
-                assert_eq!(
-                    order[i],
-                    BuildingKind::SITE_STRUCTURES,
-                    "{difficulty:?} seed {seed} {team:?}"
-                );
+                if difficulty == Difficulty::Hard {
+                    assert_eq!(
+                        order[i].len(),
+                        BuildingKind::SITE_STRUCTURES.len(),
+                        "{difficulty:?} seed {seed} {team:?}: {:?}",
+                        order[i]
+                    );
+                    for kind in BuildingKind::SITE_STRUCTURES {
+                        assert!(
+                            order[i].contains(&kind),
+                            "{difficulty:?} seed {seed} {team:?} missing {kind:?}"
+                        );
+                    }
+                    hard_orders.insert(order[i].clone());
+                } else {
+                    assert_eq!(
+                        order[i],
+                        BuildingKind::SITE_STRUCTURES,
+                        "{difficulty:?} seed {seed} {team:?}"
+                    );
+                }
             }
             assert!(
                 game.units.iter().any(|u| u.kind != UnitKind::Collector),
@@ -218,4 +240,8 @@ fn every_difficulty_builds_its_base_in_order_and_plays_on() {
             );
         }
     }
+    assert!(
+        hard_orders.len() >= 2,
+        "Hard should vary its Standard build order across seeds: {hard_orders:?}"
+    );
 }

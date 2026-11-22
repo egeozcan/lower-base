@@ -31,19 +31,23 @@ A fixed, marked spot in a base where one specific structure can be constructed. 
 _Avoid_: Slot, lot, placement
 
 **Pad**:
-The Site of a Gun. Each base has two, left and right.
+The front-line base Site where you can construct either a Gun or an Ore Depot. Each base has two, left and right.
 _Avoid_: Emplacement slot
 
 **Gun**:
 A fixed anti-tank defense constructed on a Pad.
 _Avoid_: Turret, emplacement (in player-facing text)
 
+**Ore Depot**:
+A forward Structure built on a Pad where Collectors rapidly unload ore on the outer flank. It holds buffered ore in an open hopper and streams it by conveyor into credits while its side's Refinery stands. Destroying an Ore Depot destroys all unconveyed ore inside.
+_Avoid_: Silo, bunker
+
 **Structure**:
-A building that can be constructed on a Site: Barracks, Factory, Refinery or Gun. The Command Center is a building but not a Structure.
+A building that can be constructed on a Site: Barracks, Factory, Refinery, Gun or Ore Depot. The Command Center is a building but not a Structure.
 _Avoid_: Building (when the constructible kind is meant)
 
 **Construction**:
-A Command Center building a Structure on its Site over time. The Structure exists, and can be attacked, while it is under Construction. Only one non-Gun Structure can be under Construction at a time, while each Pad builds its Gun independently.
+A Command Center building a Structure on its Site over time. The Structure exists, and can be attacked, while it is under Construction. Only one non-Pad Structure can be under Construction at a time, while each Pad builds its Gun or Ore Depot independently.
 _Avoid_: Placement, deploy
 
 ## Economy
@@ -53,11 +57,10 @@ Credits each side earns per second regardless of what it does, set by the Game M
 _Avoid_: Trickle, tick income
 
 **Refinery**:
-The Structure where Collectors deliver ore. Every Refinery a Command Center constructs, including a rebuilt one, comes with one Collector. A side can only produce Collectors while it has a finished Refinery.
-_Avoid_: Ore depot
+The Structure where Collectors deliver ore directly, or via a conveyor from an Ore Depot. Every Refinery a Command Center constructs, including a rebuilt one, comes with one Collector. A side can only produce Collectors while it has a finished Refinery.
 
 **Collector**:
-An unarmed unit that mines ore and delivers it to its side's Refinery.
+An unarmed unit that mines ore and delivers it to its side's Refinery or a Forward Ore Depot.
 _Avoid_: Harvester, miner
 
 ## Combat
